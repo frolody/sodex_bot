@@ -1,0 +1,61 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+
+:root {
+  --background: #020617;
+  --foreground: #f8fafc;
+  --card: rgba(30, 41, 59, 0.5);
+  --card-border: rgba(51, 65, 85, 0.5);
+  --accent: #f97316;
+  --success: #22c55e;
+  --danger: #ef4444;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-accent: var(--accent);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+}
+
+body {
+  font-family: 'Outfit', sans-serif;
+  background: var(--background);
+  color: var(--foreground);
+  background-image: 
+    radial-gradient(circle at 0% 0%, rgba(249, 115, 22, 0.05) 0%, transparent 50%),
+    radial-gradient(circle at 100% 100%, rgba(59, 130, 246, 0.05) 0%, transparent 50%);
+  min-height: 100vh;
+}
+
+@layer components {
+  .neobrutal-card {
+    background: #1e1e1e;
+    border: 3px solid #000;
+    box-shadow: 8px 8px 0px #000;
+    transition: all 0.2s ease;
+  }
+
+  .neobrutal-button {
+    background: var(--accent);
+    color: #000;
+    border: 3px solid #000;
+    box-shadow: 4px 4px 0px #000;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    transition: all 0.1s ease;
+  }
+
+  .neobrutal-button:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: 6px 6px 0px #000;
+  }
+
+  .neobrutal-button:active {
+    transform: translate(2px, 2px);
+    box-shadow: 0px 0px 0px #000;
+  }
+}

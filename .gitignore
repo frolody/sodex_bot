@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.next/
+out/
+build/
+dist/
+bin/
+obj/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.env
+.env.local
+.env.*.local
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project Specific
+sodex-bot-python/.env
+sodex-dashboard-nextjs/.env
+sodex-dashboard-nextjs/.env.local
