@@ -84,7 +84,7 @@ The "Command Center". Built with Next.js 15, it features:
 ## 🏆 Hackathon Submission
 This project is submitted for the **SoDEX X Akindo Wave Hacks Campaign**.
 
-**Developer**: [Your Name/Handle] (Solo Developer)
+**Developer**: Frolody (Solo Developer)
 **Project Status**: Functional Prototype (Wave 1)
 
 ---
