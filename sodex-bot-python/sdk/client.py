@@ -257,6 +257,91 @@ class SodexClient:
             final_res = self._post_trade("newOrder", sl_payload, nonce=t2)
 
         return final_res
+    def place_order_with_tpsl(
+        self,
+        account_id: int,
+        symbol_id: int,
+        side: int,
+        order_type: int,
+        quantity: str,
+        price: str,
+        tp_price: str = None,
+        sl_price: str = None
+    ) -> dict:
+        """
+        Atomic entry: Places a Parent order (modifier 3) with attached TP/SL (modifier 4).
+        """
+        t = int(time.time() * 1000)
+        is_market = int(order_type) == 2
+        
+        orders = []
+        # 1. Main Entry Order (Parent - Modifier 3)
+        main_order = OrderedDict([
+            ("clOrdID",      f"{t}-main"),
+            ("modifier",     3), # Bracket Parent
+            ("side",         int(side)),
+            ("type",         int(order_type)),
+            ("timeInForce",  int(3 if is_market else 1)),
+            ("quantity",     str(quantity)),
+            ("reduceOnly",   False),
+            ("positionSide", 1)
+        ])
+        if not is_market: main_order["price"] = str(price)
+        orders.append(main_order)
+
+        opp_side = 2 if int(side) == 1 else 1
+        
+        # 2. Take Profit (Modifier 4)
+        if tp_price:
+            tp_order = OrderedDict([
+                ("clOrdID",      f"{t}-tp"),
+                ("modifier",     4), # Attached
+                ("side",         opp_side),
+                ("type",         2), # Market/StopMarket
+                ("timeInForce",  3), # IOC
+                ("quantity",     str(quantity)),
+                ("stopPrice",    str(tp_price)),
+                ("stopType",     2), # TP
+                ("triggerType",  2), # Mark Price
+                ("reduceOnly",   True),
+                ("positionSide", 1)
+            ])
+            orders.append(tp_order)
+
+        # 3. Stop Loss (Modifier 4)
+        if sl_price:
+            sl_order = OrderedDict([
+                ("clOrdID",      f"{t}-sl"),
+                ("modifier",     4),
+                ("side",         opp_side),
+                ("type",         2),
+                ("timeInForce",  3),
+                ("quantity",     str(quantity)),
+                ("stopPrice",    str(sl_price)),
+                ("stopType",     1), # SL
+                ("triggerType",  2),
+                ("reduceOnly",   True),
+                ("positionSide", 1)
+            ])
+            orders.append(sl_order)
+
+        params = OrderedDict([
+            ("accountID", int(account_id)),
+            ("symbolID",  int(symbol_id)),
+            ("orders",    orders)
+        ])
+
+        return self._post_trade("newOrder", params, nonce=t)
+
+    def get_perps_balance(self, address: str) -> float:
+        try:
+            data = self.get_perps_balances(address)
+            if data and data.get("code") == 0:
+                balances = data.get("data", [])
+                if balances:
+                    return float(balances[0].get("balance", 0))
+        except: pass
+        return 0.0
 
     def get_symbol_info(self, symbol_name: str) -> dict:
         try:
