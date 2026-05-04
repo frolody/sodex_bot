@@ -36,3 +36,5 @@ sodex-dashboard-nextjs/.env.local
 *.db
 *.db-shm
 *.db-wal
+sodex-bot-python/scratch/
+scratch/
