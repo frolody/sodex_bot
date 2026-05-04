@@ -27,7 +27,7 @@ auto_bot = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db, client, news_agg, strategy, auto_bot
+    global db, client, news_agg, strategy, auto_bot, market_intel
     print("\n" + "="*50)
     print("SODEX AI BACKEND STARTING...")
     print("="*50)
@@ -39,6 +39,7 @@ async def lifespan(app: FastAPI):
         from agents.news_aggregator import NewsAggregator
         from agents.strategy_engine import StrategyEngine
         from sdk.autonomous_bot import AutonomousBot
+        from agents.market_intelligence import MarketIntelligence
 
         print("[1/5] Initializing Database...")
         db = DatabaseManager()
@@ -48,6 +49,9 @@ async def lifespan(app: FastAPI):
         
         print("[3/5] Initializing News Aggregator...")
         news_agg = NewsAggregator()
+
+        print("[3.5/5] Initializing Market Intelligence...")
+        market_intel = MarketIntelligence()
         
         print("[4/5] Initializing Strategy Engine...")
         strategy = StrategyEngine(db=db)
@@ -58,7 +62,7 @@ async def lifespan(app: FastAPI):
         # Start bot loop and store the task
         print(">>> Starting Autonomous Loop in Background...")
         bot_task = asyncio.create_task(auto_bot.start_loop())
-        
+
         print("="*50)
         print("BACKEND READY AT http://0.0.0.0:8000")
         print("="*50 + "\n")
@@ -79,6 +83,16 @@ async def lifespan(app: FastAPI):
         raise e
 
 app = FastAPI(title="SoDEX AI Microservice", lifespan=lifespan)
+
+@app.get("/api/market-intelligence")
+async def get_market_intel(symbol: str = "BTC"):
+    global market_intel
+    if not market_intel:
+        return {"error": "Market Intel not initialized"}
+    
+    # Simple symbol mapping for ETF (e.g. BTC-USD -> BTC)
+    clean_symbol = symbol.split("-")[0]
+    return market_intel.get_comprehensive_intel(clean_symbol)
 
 app.add_middleware(
     CORSMiddleware,
@@ -108,22 +122,61 @@ def health_check():
     return {"status": "healthy", "timestamp": time.time()}
 
 @app.get("/api/analyze")
-async def analyze_market(symbol: str = Query(..., description="The trading symbol")):
+async def analyze_market(
+    symbol: str = Query(..., description="The trading symbol"),
+    risk: str = Query("SAFETY", description="Risk profile: SAFETY, MODERATE, AGGRESSIVE"),
+    balance: str = Query("100", description="Current account balance in vUSDC"),
+    address: Optional[str] = Query(None, description="The user wallet address"),
+    mode: Optional[str] = Query(None, description="The selected trading mode")
+):
+    risk_profile = risk
     try:
         price_str = await retry_async(client.get_mark_price, symbol)
         if not price_str:
             raise HTTPException(status_code=404, detail="Price not found")
 
-        klines = await retry_async(client.get_klines, symbol, interval="15m", limit=20)
+        klines = await retry_async(client.get_klines, symbol, interval="15m", limit=50)
         news = await retry_async(news_agg.fetch_latest_news, symbol.split("-")[0])
         news_text = "\n".join([f"- {n['title']}" for n in news]) if news else ""
 
-        analysis_result = strategy.ensemble_analyze(symbol, price_str, "OPEN", news_text, klines)
+        # Fetch Market Intelligence
+        intel_data = market_intel.get_comprehensive_intel(symbol.split("-")[0])
+
+        # 6. Analyze with Strategy V2
+        from agents.strategy_v2 import StrategyV2
+        strategy_v2 = StrategyV2()
+        
+        # Priority: 1. Mode from URL param, 2. Mode from DB, 3. Default MOMENTUM
+        user_conf = db.get_config(address) if (address and db) else None
+        
+        # If mode is passed in URL, use it (Real-time dashboard selection)
+        # Otherwise use from DB
+        final_mode = mode or (user_conf["trading_mode"] if (user_conf and "trading_mode" in user_conf.keys()) else "MOMENTUM")
+        
+        # Auto-persist chosen mode to DB so it survives refresh
+        if address and mode:
+            db.update_trading_mode(address, mode)
+            print(f">>> DATABASE: Updated default mode to {mode} for {address}")
+        
+        gemini_key = user_conf["gemini_api_key"] if (user_conf and "gemini_api_key" in user_conf.keys()) else None
+        
+        price_val = float(price_str)
+        analysis_result = strategy_v2.analyze(
+            symbol, price_val, klines, news_text, intel_data,
+            mode=final_mode,
+            risk_profile=risk_profile,
+            custom_keys={"gemini_api_key": gemini_key}
+        )
 
         return {
             "symbol": symbol,
             "current_price": price_str,
             "analysis": analysis_result,
+            "sentiment": {"trend_direction": analysis_result.get("decision"), "impact_score": 5},
+            "sentiment_score": 5,
+            "risk_profile": risk_profile,
+            "market_intel": intel_data,
+            "news": news, # Include raw news list
             "timestamp": time.time()
         }
     except Exception as e:
@@ -142,12 +195,15 @@ async def get_available_markets():
 @app.get("/api/settings")
 def get_settings(address: Optional[str] = Query(None)):
     if address == "undefined": address = None
-    conf = db.get_config(address) if db else {}
+    config = db.get_config(address) if db else None
     return {
-        "is_active": conf.get("is_active", 0),
-        "private_key": conf.get("private_key", ""),
-        "symbol": conf.get("symbol", Config.TARGET_SYMBOL),
-        "account_id": conf.get("account_id", Config.SODEX_ACCOUNT_ID)
+        "is_active": config["is_active"] if config else 0,
+        "private_key": config["private_key"] if config else "",
+        "symbol": config["symbol"] if config else Config.TARGET_SYMBOL,
+        "account_id": config["account_id"] if config else Config.SODEX_ACCOUNT_ID,
+        "gemini_api_key": config["gemini_api_key"] if config else "",
+        "openrouter_api_key": config["openrouter_api_key"] if config else "",
+        "trading_mode": config["trading_mode"] if config and "trading_mode" in config.keys() else "MOMENTUM"
     }
 
 @app.post("/api/settings/save")
@@ -158,13 +214,17 @@ async def save_settings(req: Request):
     aid = data.get("account_id")
     sym = data.get("symbol", Config.TARGET_SYMBOL)
     lev = data.get("leverage", Config.DEFAULT_LEVERAGE)
+    gemini_key = data.get("gemini_api_key")
+    openrouter_key = data.get("openrouter_api_key")
+    trading_mode = data.get("trading_mode", "MOMENTUM")
     
     if not address or not pk:
         return {"code": -1, "error": "Address and Private Key are mandatory"}
     
     if db:
-        db.save_config(address, pk, aid, sym, lev)
+        db.save_config(address, pk, aid, sym, lev, gemini_key, openrouter_key, trading_mode)
     return {"status": "success"}
+
 
 @app.post("/api/settings/toggle")
 def toggle_auto_trading(address: str, active: bool):
@@ -214,7 +274,8 @@ async def get_stats(address: str = Query(None)):
                         
                         # Debug: Print raw orders to see structure
                         if raw_orders:
-                            print(f"DEBUG OPEN_ORDERS ({len(raw_orders)} found): {json.dumps(raw_orders[0], indent=2)}")
+                            # print(f"DEBUG OPEN_ORDERS ({len(raw_orders)} found): {json.dumps(raw_orders[0], indent=2)}")
+                            pass
                         
                         for p in raw_positions:
                             # 1. Map Raw Keys to Standard Names
@@ -321,16 +382,70 @@ class UnifiedTradeRequest(BaseModel):
 @app.post("/api/trade-unified")
 async def trade_unified(req: UnifiedTradeRequest):
     try:
-        # Step 1: Prep Leverage Payload
-        from collections import OrderedDict
-        symbol_id = 1 if req.symbol == "BTC-USD" else 2
+        # Step 1: Dynamic Market Metadata Resolution
+        import requests 
+        symbol_id = 1
+        tick_size = 0.01 
+        step_size = 0.1 
         
-        # FETCH Private Key from DB for this specific user
+        try:
+            # Official Sodex Endpoint for Symbol Metadata
+            sym_url = f"{client.base_url}/markets/symbols?symbol={req.symbol}"
+            resp = requests.get(sym_url, timeout=5)
+            if resp.status_code == 200:
+                sym_data = resp.json().get("data", [])
+                if sym_data:
+                    meta = sym_data[0] # Get the first match
+                    symbol_id = int(meta.get("symbolID") or meta.get("id") or symbol_id)
+                    tick_size = float(meta.get("tickSize") or tick_size)
+                    step_size = float(meta.get("stepSize") or step_size)
+                    print(f"DEBUG: Official Metadata for {req.symbol} -> ID:{symbol_id}, Tick:{tick_size}, Step:{step_size}")
+                else:
+                    print(f"DEBUG: Symbol {req.symbol} not found in official symbols list. Using defaults.")
+        except Exception as e:
+            print(f"DEBUG: Failed to fetch official market metadata: {e}")
+
+
+
+
+
+        print(f"--- FINAL MARKET METADATA FOR {req.symbol} ---")
+        print(f"    - Resolved ID: {symbol_id}")
+        print(f"    - Applied Tick Size: {tick_size}")
+        print(f"    - Applied Step Size: {step_size}")
+
+
+        # Rounding Helpers using Decimal for high precision
+        from decimal import Decimal, ROUND_HALF_UP
+        def round_step(value, step):
+            if not value or not step or step == 0: return str(value)
+            try:
+                d_val = Decimal(str(value))
+                d_step = Decimal(str(step))
+                # Calculate number of decimals from step
+                prec_str = str(d_step).rstrip('0')
+                precision = abs(prec_str.find('.') - len(prec_str)) - 1 if '.' in prec_str else 0
+                
+                # Round to nearest multiple of step
+                rounded = (d_val / d_step).to_integral_value(rounding=ROUND_HALF_UP) * d_step
+                # Format with fixed precision
+                return f"{rounded:.{precision}f}".rstrip('0').rstrip('.')
+            except:
+                return str(value)
+
+        # Apply rounding to request parameters
+        clean_price = round_step(req.price or 0, tick_size)
+        clean_qty = round_step(req.quantity or 0, step_size)
+        
+        # Step 2: Prep Leverage Payload
+        from collections import OrderedDict
+        
+        # FETCH Private Key from DB
         conf = db.get_config(req.address) if db else {}
         signing_key = conf.get("private_key")
         
         if not signing_key:
-            return {"code": -1, "error": "Private Key not found for this wallet. Please save it in settings first."}
+            return {"code": -1, "error": "Private Key not found. Check settings."}
 
         lev_params = OrderedDict([
             ("accountID",  int(req.account_id)),
@@ -338,6 +453,10 @@ async def trade_unified(req: UnifiedTradeRequest):
             ("leverage",   int(req.leverage)),
             ("marginMode", int(req.margin_mode))
         ])
+        
+        # ... (rest of the logic uses clean_price and clean_qty) ...
+        # (I need to ensure the following code uses these cleaned variables)
+
         
         # Step 2: Sign & Hit Leverage
         print(f">>> UNIFIED: Step 1 - Syncing Leverage to x{req.leverage}")
@@ -357,7 +476,7 @@ async def trade_unified(req: UnifiedTradeRequest):
             return {"code": -1, "error": f"Leverage Sync Failed: {lev_res.get('error') or lev_res.get('msg')}"}
 
         # Step 3: Prep Order Payload
-        print(f">>> UNIFIED: Step 2 - Executing {req.symbol} Order")
+        print(f">>> UNIFIED: Step 2 - Executing {req.symbol} Order (Clean Price: {clean_price}, Clean Qty: {clean_qty})")
         from collections import OrderedDict
         # Step 4: Sign & Hit Order
         nonce_ord = int(time.time() * 1000) + 1 # Ensure unique nonce
@@ -367,7 +486,27 @@ async def trade_unified(req: UnifiedTradeRequest):
 
         # Build order item based on type
         is_market = int(req.order_type) == 2
-        has_bracket = bool(req.tp_price or req.sl_price)
+        curr_p = float(req.price or 0)
+        
+        # SANITY CHECK: Validate TP/SL positions to avoid "stopPrice is invalid"
+        final_tp = None
+        final_sl = None
+        
+        if req.tp_price:
+            tp_val = float(req.tp_price)
+            if (int(req.side) == 1 and tp_val > curr_p) or (int(req.side) == 2 and tp_val < curr_p):
+                final_tp = round_step(tp_val, tick_size)
+            else:
+                print(f"⚠️ WARNING: AI TP ({tp_val}) invalid for side {req.side} @ {curr_p}. Skipped.")
+
+        if req.sl_price:
+            sl_val = float(req.sl_price)
+            if (int(req.side) == 1 and sl_val < curr_p) or (int(req.side) == 2 and sl_val > curr_p):
+                final_sl = round_step(sl_val, tick_size)
+            else:
+                print(f"⚠️ WARNING: AI SL ({sl_val}) invalid for side {req.side} @ {curr_p}. Skipped.")
+
+        has_bracket = bool(final_tp or final_sl)
         
         # Order of keys is CRITICAL for SoDEX signature
         order_item = OrderedDict()
@@ -378,44 +517,52 @@ async def trade_unified(req: UnifiedTradeRequest):
         order_item["timeInForce"] = 3 if is_market else 1
         
         if not is_market:
-            order_item["price"] = str(req.price)
+            order_item["price"] = str(clean_price)
             
-        order_item["quantity"] = str(req.quantity)
+        order_item["quantity"] = str(clean_qty)
         order_item["reduceOnly"] = False
         order_item["positionSide"] = 1
 
         orders_list = [order_item]
 
-        # Add TP/SL Orders if provided
-        if req.tp_price:
+        # Add TP/SL Orders if they passed sanity check
+        if final_tp:
             orders_list.append(OrderedDict([
                 ("clOrdID",      f"{cl_ord_id}-tp"),
                 ("modifier",     4), # ATTACHED_STOP
                 ("side",         2 if int(req.side) == 1 else 1),
                 ("type",         2), # MARKET
                 ("timeInForce",  3),
-                ("quantity",     str(req.quantity)),
-                ("stopPrice",    str(req.tp_price)),
+                ("quantity",     str(clean_qty)),
+                ("stopPrice",    str(final_tp)),
                 ("stopType",     2),
                 ("triggerType",  2),
                 ("reduceOnly",   True),
                 ("positionSide", 1)
             ]))
         
-        if req.sl_price:
+        if final_sl:
             orders_list.append(OrderedDict([
                 ("clOrdID",      f"{cl_ord_id}-sl"),
                 ("modifier",     4), # STOP_LOSS
                 ("side",         2 if int(req.side) == 1 else 1),
                 ("type",         2), # MARKET
                 ("timeInForce",  3),
-                ("quantity",     str(req.quantity)),
-                ("stopPrice",    str(req.sl_price)),
+                ("quantity",     str(clean_qty)),
+                ("stopPrice",    str(final_sl)),
                 ("stopType",     1),
                 ("triggerType",  2),
                 ("reduceOnly",   True),
                 ("positionSide", 1)
             ]))
+
+        print(f">>> SODEX: Executing {req.symbol} Order...")
+        print(f"    - Side: {'LONG' if int(req.side) == 1 else 'SHORT'}")
+        print(f"    - Type: {'MARKET' if is_market else 'LIMIT'}")
+        print(f"    - Quantity: {req.quantity}")
+        print(f"    - Leverage: x{req.leverage}")
+        if req.tp_price: print(f"    - TP: {req.tp_price}")
+        if req.sl_price: print(f"    - SL: {req.sl_price}")
 
         params = OrderedDict([
             ("accountID", int(req.account_id)),
@@ -434,6 +581,12 @@ async def trade_unified(req: UnifiedTradeRequest):
         )
         
         order_res = await retry_async(client.execute_order, params, sig_ord, nonce_ord)
+        
+        if order_res.get("code") == 0:
+            print(f"✅ SODEX SUCCESS: Order placed successfully. Response: {order_res.get('msg')}")
+        else:
+            print(f"❌ SODEX FAILED: {order_res.get('error') or order_res.get('msg')}")
+            
         return order_res
 
     except Exception as e:

@@ -43,8 +43,13 @@ Bursa SoDEX melakukan hashing pada string JSON mentah. Urutan properti dalam obj
 *   **Market Order (`type: 2`)**: Jangan mengirimkan parameter `price`. 
 *   **Alasan**: Jika harga dikirim, bursa menganggapnya sebagai batasan slippage yang sangat ketat (IOC). Jika harga bergerak sedikit saja, order akan langsung dibatalkan (Instantly Cancelled).
 
-## 5. Header Testnet
+## 5. Multi-User & SaaS Architecture (BYOK)
+- **Bring Your Own Key (BYOK)**: Setiap user dapat memasukkan API Key Gemini dan OpenRouter mereka sendiri untuk menghindari global rate limits.
+- **Parallel Execution**: Bot menggunakan `asyncio.create_task` untuk menganalisis banyak user secara bersamaan, memastikan tidak ada user yang harus mengantre.
+- **Isolated State**: Wallet, profil risiko, dan riwayat trading setiap user terisolasi sepenuhnya di database.
+
+## 6. Header Testnet
 *   **Testnet**: Jangan mengirimkan header `X-API-Key`. Bursa mendeteksi konflik jika API Key dikirim bersamaan dengan tanda tangan custodial dari wallet.
 
-## 6. Format Signature
+## 7. Format Signature
 *   Selalu gunakan fungsi `formatSodexSignature` untuk memastikan signature berakhir dengan `00` atau `01` (bukan `1b` atau `1c`).

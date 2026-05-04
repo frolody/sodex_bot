@@ -13,16 +13,16 @@
 import { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
-import { 
-  Zap, 
-  TrendingUp, 
-  TrendingDown, 
-  Search, 
-  BarChart3, 
-  ShieldCheck, 
-  BrainCircuit, 
-  MessageSquareQuote, 
-  AlertTriangle, 
+import {
+  Zap,
+  TrendingUp,
+  TrendingDown,
+  Search,
+  BarChart3,
+  ShieldCheck,
+  BrainCircuit,
+  MessageSquareQuote,
+  AlertTriangle,
   Wallet,
   History,
   Info,
@@ -49,14 +49,14 @@ export default function Dashboard() {
   const { data: balance } = useBalance({ address });
   const chainId = useChainId();
   const { switchChain } = useSwitchChain();
-  
+
   const { signTypedDataAsync, data: signature, isPending: isSigning, isSuccess: isSigned } = useSignTypedData();
-  
+
   // Custom states for transaction tracking
   const [isExecuting, setIsExecuting] = useState(false);
   const [isConfirmed, setIsConfirmed] = useState(false);
   const [hash, setHash] = useState<string | null>(null);
-  
+
   // Account Status
   const [isRegistered, setIsRegistered] = useState<boolean | null>(null);
   const [accountInfo, setAccountInfo] = useState<any>(null);
@@ -68,21 +68,39 @@ export default function Dashboard() {
   const [analysis, setAnalysis] = useState<any>(null);
   const [activePayload, setActivePayload] = useState<any>(null);
   const [userPrivateKey, setUserPrivateKey] = useState<string>('');
+  const [geminiKey, setGeminiKey] = useState<string>('');
+  const [openrouterKey, setOpenrouterKey] = useState<string>('');
+  const [tradingMode, setTradingMode] = useState<string>('MOMENTUM');
   const [showPK, setShowPK] = useState(false);
+  // 3. Precise Price Formatter for low-priced tokens
+  const formatPrice = (price: any) => {
+    if (!price || price === '---' || price === '0') return '---';
+    const val = typeof price === 'string' ? parseFloat(price) : price;
+    if (isNaN(val)) return price;
+    return new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: val < 1 ? 4 : 2,
+      maximumFractionDigits: val < 1 ? 8 : 2
+    }).format(val);
+  };
+
   const [availableMarkets, setAvailableMarkets] = useState<string[]>([]);
   const [klines, setKlines] = useState<any[]>([]);
   const [chartLoading, setChartLoading] = useState(false);
+  const [marketIntel, setMarketIntel] = useState<any>(null);
 
   // Modal & Trade States
   const [showModal, setShowModal] = useState(false);
   const [execLeverage, setExecLeverage] = useState(10);
   const [marginUSD, setMarginUSD] = useState("10");
   const [execTP, setExecTP] = useState("");
+  const [execTPDesc, setExecTPDesc] = useState("");
   const [execSL, setExecSL] = useState("");
+  const [execSLDesc, setExecSLDesc] = useState("");
   const [execPrice, setExecPrice] = useState("");
   const [execOrderType, setExecOrderType] = useState(2); // 2 = MARKET, 1 = LIMIT
   const [activeNonce, setActiveNonce] = useState<number>(0);
   const [overrideSide, setOverrideSide] = useState<'LONG' | 'SHORT' | null>(null);
+  const [riskProfile, setRiskProfile] = useState<'SAFETY' | 'MODERATE' | 'AGGRESSIVE'>('SAFETY');
 
   // Fetch Klines on symbol change
   useEffect(() => {
@@ -95,10 +113,21 @@ export default function Dashboard() {
     if (isConnected && address) {
       checkRegistration();
       fetchSettings(address);
-      const interval = setInterval(fetchStats, 5000);
+      
+      // Trigger immediately on change
+      fetchStats();
+      fetchMarketIntel();
+      
+      // Then start the interval
+      const interval = setInterval(() => {
+        fetchStats();
+        fetchMarketIntel();
+      }, 5000);
       return () => clearInterval(interval);
     } else {
       setIsRegistered(null);
+      setAccountInfo(null);
+      setStats(null); // Clear statistics and positions
     }
   }, [isConnected, address]);
 
@@ -117,17 +146,33 @@ export default function Dashboard() {
       if (data.private_key) {
         setUserPrivateKey(data.private_key);
       }
+      if (data.gemini_api_key) setGeminiKey(data.gemini_api_key);
+      if (data.openrouter_api_key) setOpenrouterKey(data.openrouter_api_key);
+      if (data.trading_mode) setTradingMode(data.trading_mode);
     } catch (err) { console.error(err); }
   };
 
   const fetchStats = async () => {
     try {
-      const url = address 
-        ? `${getBaseUrl()}/api/stats?address=${address}` 
+      const url = address
+        ? `${getBaseUrl()}/api/stats?address=${address}`
         : `${getBaseUrl()}/api/stats`;
       const resp = await fetch(url);
       const data = await resp.json();
       setStats(data);
+      
+      // Also update accountInfo if data contains it to ensure balance refreshes
+      if (data.account_id) {
+        setAccountInfo(data);
+      }
+    } catch (err) { console.error(err); }
+  };
+
+  const fetchMarketIntel = async () => {
+    try {
+      const resp = await fetch(`${getBaseUrl()}/api/market-intelligence?symbol=${symbol}`);
+      const data = await resp.json();
+      setMarketIntel(data);
     } catch (err) { console.error(err); }
   };
 
@@ -149,8 +194,8 @@ export default function Dashboard() {
       if (data.klines) {
         setKlines(data.klines);
       }
-    } catch (err) { 
-      console.error(err); 
+    } catch (err) {
+      console.error(err);
     } finally {
       setChartLoading(false);
     }
@@ -169,7 +214,10 @@ export default function Dashboard() {
           address: address,
           private_key: userPrivateKey,
           account_id: accountInfo?.account_id,
-          symbol: symbol
+          symbol: symbol,
+          gemini_api_key: geminiKey,
+          openrouter_api_key: openrouterKey,
+          trading_mode: tradingMode
         })
       });
       const data = await resp.json();
@@ -182,7 +230,7 @@ export default function Dashboard() {
   const toggleAutoTrading = async () => {
     if (isToggling || !address) return;
     const newState = !autoTrading;
-    
+
     // VALIDATION: Check if private key exists before enabling auto
     if (newState && (!userPrivateKey || userPrivateKey.trim() === "")) {
       alert("CRITICAL: EVM Private Key is missing! \n\nPlease enter and SAVE your Private Key in the Session Auth field first.");
@@ -193,8 +241,8 @@ export default function Dashboard() {
     try {
       await fetch(`${getBaseUrl()}/api/settings/toggle?address=${address}&active=${newState}`, { method: 'POST' });
       setAutoTrading(newState);
-    } catch (err) { 
-      console.error(err); 
+    } catch (err) {
+      console.error(err);
     } finally {
       setIsToggling(false);
     }
@@ -205,11 +253,11 @@ export default function Dashboard() {
     try {
       // Use viem's parseSignature for reliable R, S, V extraction
       const { r, s, v } = parseSignature(sig as `0x${string}`);
-      
+
       // Normalize V: SoDEX expects 00 or 01 (instead of 27 or 28)
       const vNormalized = Number(v) >= 27 ? Number(v) - 27 : Number(v);
       const vHex = vNormalized.toString(16).padStart(2, '0');
-      
+
       // The 0x01 prefix is often required by SoDEX for EIP-712 signatures
       return `0x01${r.slice(2)}${s.slice(2)}${vHex}`;
     } catch (err) {
@@ -254,9 +302,29 @@ export default function Dashboard() {
   const handleAnalyze = async () => {
     setLoading(true);
     try {
-      const resp = await fetch(`${getBaseUrl()}/api/analyze?symbol=${symbol}`);
+      const bal = accountInfo?.balance || "100";
+      const resp = await fetch(`${getBaseUrl()}/api/analyze?symbol=${symbol}&risk=${riskProfile}&balance=${bal}&address=${address}&mode=${tradingMode}`);
       const data = await resp.json();
       setAnalysis(data);
+      
+      // Auto-update margin/TP/SL with cleaned values and descriptions
+      if (data.analysis?.params?.margin_usd) {
+        const rawMargin = data.analysis.params.margin_usd.toString();
+        const numMargin = rawMargin.match(/[\d.]+/);
+        if (numMargin) setMarginUSD(numMargin[0]);
+      }
+      if (data.analysis?.params?.tp_price) {
+        const rawTP = data.analysis.params.tp_price.toString();
+        const numTP = rawTP.match(/[\d.]+/);
+        if (numTP) setExecTP(numTP[0]);
+        setExecTPDesc(data.analysis.params.tp_desc || "");
+      }
+      if (data.analysis?.params?.sl_price) {
+        const rawSL = data.analysis.params.sl_price.toString();
+        const numSL = rawSL.match(/[\d.]+/);
+        if (numSL) setExecSL(numSL[0]);
+        setExecSLDesc(data.analysis.params.sl_desc || "");
+      }
     } catch (err) {
       console.error("Analysis failed:", err);
       alert("Failed to connect to AI backend. Ensure api.py is running on port 8000.");
@@ -267,7 +335,7 @@ export default function Dashboard() {
 
   const handleExecute = (manualSide?: 'LONG' | 'SHORT') => {
     if (!analysis) return;
-    
+
     const side = manualSide || (analysis.analysis.decision as 'LONG' | 'SHORT');
     if (side !== 'LONG' && side !== 'SHORT') {
       alert("Please select a side (LONG/SHORT) or wait for AI signal.");
@@ -279,7 +347,7 @@ export default function Dashboard() {
     setExecTP(analysis.analysis.params?.tp_price || "");
     setExecPrice(analysis.current_price.toString());
     setExecOrderType(2); // Default to Market for convenience
-    
+
     setShowModal(true);
   };
 
@@ -290,7 +358,7 @@ export default function Dashboard() {
       // FIX: Ensure very strict stringification for hashing
       const payloadJson = JSON.stringify(params).replace(/\s/g, '');
       const payloadHash = keccak256(stringToBytes(`{"type":"${type}","params":${payloadJson}}`));
-      
+
       const domain = {
         name: 'futures', version: '1', chainId: BigInt(138565),
         verifyingContract: '0x0000000000000000000000000000000000000000' as `0x${string}`,
@@ -308,7 +376,7 @@ export default function Dashboard() {
       } else {
         rawSig = await signTypedDataAsync({ domain, types, primaryType: 'ExchangeAction', message });
       }
-      
+
       return { signature: formatSodexSignature(rawSig), nonce };
     }
   };
@@ -340,7 +408,10 @@ export default function Dashboard() {
       const result = await resp.json();
       if (result.code === 0) { alert(`Successfully executed ${side}!`); fetchStats(); }
       else { alert(`Error: ${result.error || result.msg}`); }
-    } catch (err) { alert("Network Error"); } finally { setIsExecuting(false); }
+    } catch (err) { alert("Network Error"); } finally { 
+      setIsExecuting(false);
+      setOverrideSide(null);
+    }
   };
 
   const confirmExecuteClassic = async (side: 'LONG' | 'SHORT') => {
@@ -360,12 +431,12 @@ export default function Dashboard() {
         type: execOrderType,
         timeInForce: execOrderType === 2 ? 3 : 1
       };
-      
+
       // Price MUST come before quantity for SoDEX signature
       if (execOrderType !== 2) {
         mainOrder.price = calcPrice;
       }
-      
+
       mainOrder.quantity = calcQty;
       mainOrder.reduceOnly = false;
       mainOrder.positionSide = 1;
@@ -411,22 +482,104 @@ export default function Dashboard() {
           orders: orders
         }
       };
-      
+
       const { signature } = await SodexAuth.signExecuteRequest(orderPayload.params, 'newOrder', nonce);
       const resp = await fetch(`${getBaseUrl()}/api/execute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ payload: orderPayload, signature, nonce })
       });
-      
+
       const result = await resp.json();
       if (result.code === 0) { alert(`Classic Success: ${side}`); fetchStats(); }
       else { alert(`Classic Error: ${result.error || result.msg}`); }
-    } catch (err) { alert("Classic Failed"); } finally { setIsExecuting(false); }
+    } catch (err) { alert("Classic Failed"); } finally { 
+      setIsExecuting(false);
+      setOverrideSide(null);
+    }
   };
 
+  // --- SECRET DEMO MODE WITH VIRTUAL CURSOR ---
+  const [cursorPos, setCursorPos] = useState({ x: -100, y: -100 });
+  const [isClicking, setIsClicking] = useState(false);
+
+  const moveCursorTo = async (elementId: string) => {
+    const el = document.getElementById(elementId);
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      const x = rect.left + rect.width / 2 + window.scrollX;
+      const y = rect.top + rect.height / 2 + window.scrollY;
+      setCursorPos({ x, y });
+      await new Promise(r => setTimeout(r, 1000)); // Travel time
+      setIsClicking(true);
+      await new Promise(r => setTimeout(r, 200));
+      setIsClicking(false);
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      if (e.altKey && e.key === 's') {
+        console.log("🎬 CINEMATIC DEMO START!");
+
+        // 1. Move to Token Selector
+        await moveCursorTo('token-select');
+        setSymbol('BTC-USD');
+        await new Promise(r => setTimeout(r, 1500));
+
+        // 2. Move to Analyze Button
+        await moveCursorTo('analyze-btn');
+        document.getElementById('analyze-btn')?.click();
+
+        // 3. Wait for AI (Let cursor stay near title)
+        setCursorPos({ x: 400, y: 300 });
+        await new Promise(r => setTimeout(r, 12000));
+
+        // 4. Scroll and move to Auto Toggle
+        window.scrollTo({ top: 800, behavior: 'smooth' });
+        await new Promise(r => setTimeout(r, 2000));
+
+        // 5. Toggle Auto Trading ON
+        await moveCursorTo('auto-trading-toggle');
+        setAutoTrading(true);
+        await new Promise(r => setTimeout(r, 6000));
+
+        // 6. Toggle Auto Trading OFF (Show Manual Override)
+        await moveCursorTo('auto-trading-toggle');
+        setAutoTrading(false);
+        await new Promise(r => setTimeout(r, 2000));
+
+        // 7. Move to FORCE LONG
+        window.scrollTo({ top: 400, behavior: 'smooth' }); // Scroll up a bit to see the buttons
+        await new Promise(r => setTimeout(r, 1500));
+        await moveCursorTo('force-long-btn');
+        // We won't trigger .click() here to avoid accidental transactions during recording, 
+        // OR we can trigger it if you're ready to sign in MetaMask.
+        console.log("👉 User can now click FORCE LONG or SHORT");
+
+        await new Promise(r => setTimeout(r, 4000));
+        setCursorPos({ x: -100, y: -100 }); // Hide cursor
+        console.log("✅ EXTENDED CINEMATIC DEMO COMPLETE!");
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [symbol, autoTrading]);
+
   return (
-    <main className="flex-1 p-4 md:p-6 max-w-7xl mx-auto w-full">
+    <main className="flex-1 p-4 md:p-6 max-w-7xl mx-auto w-full relative">
+      {/* VIRTUAL CURSOR */}
+      <div
+        className={`fixed z-[9999] pointer-events-none transition-all duration-700 ease-in-out bg-accent rounded-full border-2 border-white shadow-[0_0_20px_rgba(249,115,22,0.6)] ${isClicking ? 'scale-75' : 'scale-100'}`}
+        style={{
+          left: cursorPos.x,
+          top: cursorPos.y,
+          width: '20px',
+          height: '20px',
+          opacity: cursorPos.x < 0 ? 0 : 1,
+          transform: 'translate(-50%, -50%)'
+        }}
+      />
       {/* Header with Wallet (Compact) */}
       <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
         <div>
@@ -465,9 +618,8 @@ export default function Dashboard() {
                 {/* Middle: Live PnL */}
                 <div className="flex-1 p-4 flex flex-col justify-center items-center md:items-start border-r border-slate-800 bg-gradient-to-r from-transparent to-success/5">
                   <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">UNREALIZED PNL</span>
-                  <div className={`text-4xl font-black italic tracking-tighter ${
-                    (parseFloat(pos.unrealized_pnl) || 0) >= 0 ? 'text-success' : 'text-danger'
-                  }`}>
+                  <div className={`text-4xl font-black italic tracking-tighter ${(parseFloat(pos.unrealized_pnl) || 0) >= 0 ? 'text-success' : 'text-danger'
+                    }`}>
                     {(parseFloat(pos.unrealized_pnl) || 0) >= 0 ? '+' : ''}
                     {(parseFloat(pos.unrealized_pnl) || 0).toFixed(2)}
                     <span className="text-sm ml-1 not-italic opacity-50">vUSDC</span>
@@ -479,25 +631,25 @@ export default function Dashboard() {
                   <div className="flex flex-col">
                     <span className="text-[8px] font-black text-slate-500 uppercase">Entry Price</span>
                     <span className="text-xs font-mono text-white">
-                      {pos.entry_price && pos.entry_price !== "0" ? `$${parseFloat(pos.entry_price).toLocaleString()}` : '---'}
+                      {pos.entry_price && pos.entry_price !== "0" ? `$${formatPrice(pos.entry_price)}` : '---'}
                     </span>
                   </div>
                   <div className="flex flex-col">
                     <span className="text-[8px] font-black text-slate-500 uppercase">Mark Price</span>
                     <span className="text-xs font-mono text-accent animate-pulse">
-                      {pos.mark_price && pos.mark_price !== "0" ? `$${parseFloat(pos.mark_price).toLocaleString()}` : '---'}
+                      {pos.mark_price && pos.mark_price !== "0" ? `$${formatPrice(pos.mark_price)}` : '---'}
                     </span>
                   </div>
                   <div className="flex flex-col">
                     <span className="text-[8px] font-black text-slate-500 uppercase text-success">Take Profit</span>
                     <span className="text-[10px] font-black text-success italic">
-                      {pos.tp_price && pos.tp_price !== "---" ? `$${parseFloat(pos.tp_price).toLocaleString()}` : 'NOT SET'}
+                      {pos.tp_price && pos.tp_price !== "---" ? `$${formatPrice(pos.tp_price)}` : 'NOT SET'}
                     </span>
                   </div>
                   <div className="flex flex-col">
                     <span className="text-[8px] font-black text-slate-500 uppercase text-danger">Stop Loss</span>
                     <span className="text-[10px] font-black text-danger italic">
-                      {pos.sl_price && pos.sl_price !== "---" ? `$${parseFloat(pos.sl_price).toLocaleString()}` : 'NOT SET'}
+                      {pos.sl_price && pos.sl_price !== "---" ? `$${formatPrice(pos.sl_price)}` : 'NOT SET'}
                     </span>
                   </div>
                   <div className="flex flex-col">
@@ -514,24 +666,24 @@ export default function Dashboard() {
           ))
         ) : (
           <div className="neobrutal-card p-2 bg-slate-900/50 border-slate-800 flex items-center justify-between px-4">
-             <div className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 bg-slate-700 rounded-full"></div>
-                <span className="text-[9px] font-black text-slate-600 uppercase tracking-[0.3em]">PORTFOLIO STATUS: FLAT</span>
-             </div>
-             <span className="text-[8px] font-bold text-slate-700 uppercase italic">Waiting for AI Momentum...</span>
+            <div className="flex items-center gap-2">
+              <div className="w-1.5 h-1.5 bg-slate-700 rounded-full"></div>
+              <span className="text-[9px] font-black text-slate-600 uppercase tracking-[0.3em]">PORTFOLIO STATUS: FLAT</span>
+            </div>
+            <span className="text-[8px] font-bold text-slate-700 uppercase italic">Waiting for AI Momentum...</span>
           </div>
         )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        
+
         {/* Left Column: Asset Selection & Controls */}
         <div className="lg:col-span-4 space-y-4">
           <section className="neobrutal-card p-4 bg-slate-900 border-slate-800">
             <h2 className="text-sm font-black mb-4 flex items-center gap-2 uppercase tracking-widest">
               <Search className="w-4 h-4 text-accent" /> ASSET
             </h2>
-            
+
             <div className="space-y-3">
               <div className="flex items-center justify-between p-3 bg-black border border-slate-800">
                 <div className="flex items-center gap-2">
@@ -543,7 +695,8 @@ export default function Dashboard() {
                     </span>
                   </div>
                 </div>
-                <button 
+                <button
+                  id="auto-trading-toggle"
                   onClick={toggleAutoTrading}
                   disabled={isToggling}
                   className={`w-10 h-5 rounded-none border-2 flex items-center transition-all ${isToggling ? 'opacity-50 cursor-wait' : ''} ${autoTrading ? 'border-accent bg-accent/20 justify-end' : 'border-slate-700 bg-slate-800 justify-start'}`}
@@ -552,7 +705,8 @@ export default function Dashboard() {
                 </button>
               </div>
 
-              <select 
+              <select
+                id="token-select"
                 value={symbol}
                 onChange={(e) => setSymbol(e.target.value)}
                 className="w-full p-3 bg-black border border-slate-700 text-white font-bold text-xs focus:border-accent outline-none appearance-none cursor-pointer"
@@ -570,7 +724,43 @@ export default function Dashboard() {
                 )}
               </select>
 
-              <button 
+              {/* Risk Profile Selector */}
+              <div className="mb-4">
+                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Analysis Risk Profile</span>
+                <div className="grid grid-cols-3 gap-2 p-1 bg-black border border-slate-800">
+                  {(['SAFETY', 'MODERATE', 'AGGRESSIVE'] as const).map((profile) => (
+                    <button
+                      key={profile}
+                      onClick={() => setRiskProfile(profile)}
+                      className={`py-2 text-[9px] font-black uppercase transition-all border ${riskProfile === profile
+                          ? profile === 'AGGRESSIVE' ? 'bg-danger/20 border-danger text-danger'
+                            : profile === 'MODERATE' ? 'bg-warning/20 border-warning text-warning'
+                              : 'bg-success/20 border-success text-success'
+                          : 'border-transparent text-slate-600 hover:text-slate-400'
+                        }`}
+                    >
+                      {profile}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Trading Strategy Mode - Positioned Here */}
+              <div className="mb-4">
+                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Execution Strategy</span>
+                <select
+                  value={tradingMode}
+                  onChange={(e) => setTradingMode(e.target.value)}
+                  className="w-full bg-black border border-slate-700 p-3 text-[10px] text-white font-black uppercase outline-none focus:border-accent appearance-none cursor-pointer"
+                >
+                  <option value="MOMENTUM">⚡ MOMENTUM (Trend Following)</option>
+                  <option value="CONTRARIAN">🔄 CONTRARIAN (Mean Reversion)</option>
+                  <option value="SMART_MONEY">🏦 SMART MONEY (ETF Flow)</option>
+                </select>
+              </div>
+
+              <button
+                id="analyze-btn"
                 onClick={handleAnalyze}
                 disabled={loading || autoTrading}
                 className={`w-full neobrutal-button p-3 flex items-center justify-center gap-2 text-xs disabled:opacity-50 ${autoTrading ? 'bg-slate-800 text-slate-500' : ''}`}
@@ -584,13 +774,28 @@ export default function Dashboard() {
           {/* Session Private Key Section (MOVED UP & COMPACT) */}
           <section className="neobrutal-card p-4 bg-slate-900 border-warning/20">
             <h2 className="text-sm font-black mb-3 flex items-center gap-2 uppercase tracking-widest text-warning">
-              <Wallet className="w-4 h-4" /> SESSION AUTH
+              <ShieldCheck className="w-4 h-4" /> SESSION AUTH
             </h2>
+
+            {/* Safety Guide Alert */}
+            <div className="mb-4 p-3 bg-warning/5 border-l-4 border-warning text-[10px] space-y-2">
+              <p className="text-warning font-black uppercase">⚠️ SAFETY & SETUP GUIDE:</p>
+              <ol className="list-decimal list-inside text-slate-400 font-bold space-y-1">
+                <li>Register a <span className="text-white">NEW WALLET</span> on <a href="https://testnet.sodex.com" target="_blank" rel="noopener noreferrer" className="text-accent underline hover:text-white">SoDEX Testnet</a>.</li>
+                <li>Backup that specific <span className="text-white">EVM Private Key</span>.</li>
+                <li>Claim <span className="text-white">vUSDC Faucet</span> and transfer to <span className="text-success font-black">FUTURE BALANCE</span> (not Spot).</li>
+              </ol>
+              <p className="text-slate-500 italic mt-2">
+                Note: Your key is stored locally in RAM for high-frequency signing and never leaves your browser.
+              </p>
+            </div>
+            
             <div className="space-y-3">
               <div className="relative">
-                <input 
+                <label className="block text-[8px] font-black text-slate-500 uppercase mb-1">EVM Wallet Private Key</label>
+                <input
                   type={showPK ? "text" : "password"}
-                  placeholder="Private Key"
+                  placeholder="0x..."
                   value={userPrivateKey}
                   onChange={(e) => setUserPrivateKey(e.target.value)}
                   className="w-full bg-black border border-slate-700 p-2 pr-8 text-[10px] text-white font-mono outline-none focus:border-warning"
@@ -599,13 +804,39 @@ export default function Dashboard() {
                   {showPK ? <ShieldCheck className="w-3 h-3" /> : <Zap className="w-3 h-3" />}
                 </button>
               </div>
-              <button 
+
+              {/* BYOK: AI Keys */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="relative">
+                  <label className="block text-[8px] font-black text-slate-500 uppercase mb-1">Gemini API Key (Optional)</label>
+                  <input
+                    type="password"
+                    placeholder="AIza..."
+                    value={geminiKey}
+                    onChange={(e) => setGeminiKey(e.target.value)}
+                    className="w-full bg-black border border-slate-700 p-2 text-[10px] text-white font-mono outline-none focus:border-accent"
+                  />
+                </div>
+                <div className="relative">
+                  <label className="block text-[8px] font-black text-slate-500 uppercase mb-1">OpenRouter Key (Optional)</label>
+                  <input
+                    type="password"
+                    placeholder="sk-or-..."
+                    value={openrouterKey}
+                    onChange={(e) => setOpenrouterKey(e.target.value)}
+                    className="w-full bg-black border border-slate-700 p-2 text-[10px] text-white font-mono outline-none focus:border-accent"
+                  />
+                </div>
+              </div>
+
+              <button
                 onClick={saveSettings}
                 disabled={!userPrivateKey}
                 className="w-full neobrutal-button bg-warning/20 text-warning p-2 font-black uppercase text-[10px] border-warning/30 hover:bg-warning hover:text-black disabled:opacity-30"
               >
                 SAVE TO DATABASE
               </button>
+
               {userPrivateKey && (
                 <div className="flex items-center gap-1 text-[9px] text-success font-black italic uppercase">
                   <ShieldCheck className="w-3 h-3" /> Key Active
@@ -616,7 +847,7 @@ export default function Dashboard() {
 
           {/* Wallet Status Card (COMPACT) */}
           <section className="neobrutal-card p-4 bg-slate-900 border-slate-800">
-             <h2 className="text-sm font-black mb-3 flex items-center gap-2 uppercase tracking-widest text-slate-400">
+            <h2 className="text-sm font-black mb-3 flex items-center gap-2 uppercase tracking-widest text-slate-400">
               <ShieldCheck className="w-4 h-4 text-accent" /> STATUS
             </h2>
             <div className="space-y-2">
@@ -634,16 +865,49 @@ export default function Dashboard() {
               </div>
             </div>
           </section>
+
+          {/* Market Intelligence Widgets (NEW) */}
+          <section className="neobrutal-card p-4 bg-slate-900 border-slate-800">
+            <h2 className="text-sm font-black mb-4 flex items-center gap-2 uppercase tracking-widest text-slate-400">
+              <BarChart3 className="w-4 h-4 text-accent" /> MARKET INTEL
+            </h2>
+            
+            <div className="grid grid-cols-1 gap-3">
+              {/* ETF Flow Card */}
+              <div className="p-3 bg-black/40 border border-slate-800 flex flex-col justify-between min-h-[80px]">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-[8px] font-black text-slate-500 uppercase">ETF Net Inflow</span>
+                  <span className="text-[8px] font-black text-slate-600 uppercase">US Market</span>
+                </div>
+                {marketIntel?.etf ? (
+                  <div className="mt-auto">
+                    <span className={`text-xl font-black italic tracking-tighter ${marketIntel.etf.net_inflow >= 0 ? 'text-success' : 'text-danger'}`}>
+                      {marketIntel.etf.net_inflow >= 0 ? '+' : ''}
+                      {(marketIntel.etf.net_inflow / 1000000).toFixed(1)}M
+                    </span>
+                    <span className="block text-[8px] text-slate-500 font-bold uppercase mt-1">
+                      {marketIntel.etf.date || 'LATEST'} • vUSDC
+                    </span>
+                  </div>
+                ) : (
+                  <div className="animate-pulse flex flex-col gap-2 mt-auto">
+                    <div className="h-4 w-20 bg-slate-800 rounded"></div>
+                    <div className="h-2 w-12 bg-slate-800 rounded"></div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
         </div>
 
         {/* Right Column: AI Analysis & Chart */}
         <div className="lg:col-span-8 space-y-6">
-          
+
           {loading ? (
-             <div className="neobrutal-card p-12 flex flex-col items-center justify-center bg-slate-900 h-full min-h-[500px]">
-              <div className="relative mb-8">
-                 <div className="w-24 h-24 border-4 border-accent border-t-transparent rounded-full animate-spin"></div>
-                 <BrainCircuit className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 text-accent" />
+            <div className="neobrutal-card p-8 flex flex-col items-center justify-center bg-slate-900 min-h-[300px]">
+              <div className="relative mb-6">
+                <div className="w-16 h-16 border-4 border-accent border-t-transparent rounded-full animate-spin"></div>
+                <BrainCircuit className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 text-accent" />
               </div>
               <h3 className="text-2xl font-black text-white italic mb-2 tracking-tighter">PROCESSING MACRO DATA</h3>
               <p className="text-slate-500 font-bold uppercase tracking-widest text-sm animate-pulse">
@@ -665,8 +929,8 @@ export default function Dashboard() {
                 </div>
                 <div className="bg-black/40 p-6 border-l-4 border-accent italic text-slate-400">
                   <p className="text-sm leading-relaxed">
-                    "Bot is currently monitoring global news and technical indicators. 
-                    <span className="text-white font-bold ml-1">Status: Waiting for momentum.</span> 
+                    "Bot is currently monitoring global news and technical indicators.
+                    <span className="text-white font-bold ml-1">Status: Waiting for momentum.</span>
                     The system will automatically execute orders when the AI Signal Score exceeds the threshold."
                   </p>
                 </div>
@@ -702,36 +966,51 @@ export default function Dashboard() {
                   <div className="flex items-center gap-4">
                     <span className="text-slate-500 text-xs font-bold uppercase tracking-tighter">RELIABILITY: HIGH</span>
                     <span className="text-[10px] font-black bg-accent/20 text-accent px-2 py-1 uppercase tracking-widest border border-accent/30">
-                      {analysis.analysis.model_name || 'HYBRID ENGINE'}
+                      {analysis.analysis?.analysis_model || analysis.analysis?.model_name || 'HYBRID ENGINE'}
                     </span>
                   </div>
                 </div>
 
                 <div className="p-4">
                   <div className="flex flex-col md:flex-row gap-4 mb-4">
-                    <div className={`p-4 rounded-none border-2 ${
-                      analysis.analysis.decision === 'LONG' ? 'border-success bg-success/5' : 
-                      analysis.analysis.decision === 'SHORT' ? 'border-danger bg-danger/5' : 
-                      'border-slate-700 bg-slate-800/50'
-                    } flex-1 flex flex-col items-center justify-center text-center`}>
+                    <div className={`p-4 rounded-none border-2 ${analysis.analysis?.decision === 'LONG' ? 'border-success bg-success/5' :
+                        analysis.analysis?.decision === 'SHORT' ? 'border-danger bg-danger/5' :
+                          'border-slate-700 bg-slate-800/50'
+                      } flex-1 flex flex-col items-center justify-center text-center`}>
                       <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Recommendation</span>
-                      <h3 className={`text-4xl font-black italic tracking-tighter ${
-                        analysis.analysis.decision === 'LONG' ? 'text-success' : 
-                        analysis.analysis.decision === 'SHORT' ? 'text-danger' : 
-                        'text-slate-400'
-                      }`}>
-                        {analysis.analysis.decision}
+                      <h3 className={`text-4xl font-black italic tracking-tighter ${analysis.analysis?.decision === 'LONG' ? 'text-success' :
+                          analysis.analysis?.decision === 'SHORT' ? 'text-danger' :
+                            'text-slate-400'
+                        }`}>
+                        {analysis.analysis?.decision}
                       </h3>
                     </div>
 
                     <div className="flex-2 space-y-2">
-                       <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2">
                         <MessageSquareQuote className="w-4 h-4 text-accent" />
                         <h4 className="text-sm font-black italic">AI REASONING</h4>
                       </div>
-                      <p className="text-[11px] text-slate-300 leading-tight bg-black/40 p-3 border-l-2 border-accent italic">
-                        {analysis.analysis.reasoning?.strategy || analysis.analysis.reasoning || "No reasoning provided."}
-                      </p>
+                      <div className="space-y-2">
+                        <div className="bg-black/40 p-3 border-l-2 border-accent">
+                          <span className="block text-[8px] font-black text-accent uppercase mb-1">FUNDAMENTAL & INSTITUTIONAL</span>
+                          <p className="text-[10px] text-slate-300 leading-tight italic">
+                            {analysis.analysis?.fundamental_analysis || "No fundamental analysis."}
+                          </p>
+                        </div>
+                        <div className="bg-black/40 p-3 border-l-2 border-success">
+                          <span className="block text-[8px] font-black text-success uppercase mb-1">TECHNICAL ANALYSIS (EMA/RSI/VOL)</span>
+                          <p className="text-[10px] text-slate-300 leading-tight italic">
+                            {analysis.analysis?.technical_analysis || "No technical analysis."}
+                          </p>
+                        </div>
+                        <div className="bg-black/40 p-3 border-l-2 border-slate-500">
+                          <span className="block text-[8px] font-black text-slate-400 uppercase mb-1">OVERALL STRATEGY</span>
+                          <p className="text-[10px] text-slate-300 leading-tight italic">
+                            {analysis.analysis?.reasoning || "No strategy provided."}
+                          </p>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -740,86 +1019,96 @@ export default function Dashboard() {
                     <div className="grid grid-cols-3 gap-4">
                       <div className="p-2 border border-slate-800 text-center">
                         <span className="block text-[8px] font-black text-slate-500 uppercase mb-1">ENTRY</span>
-                        <span className="text-lg font-black text-white italic tracking-tighter">${parseFloat(analysis.current_price).toLocaleString()}</span>
+                        <span className="text-lg font-black text-white italic tracking-tighter">${formatPrice(analysis.current_price)}</span>
                       </div>
-                      <div className="p-2 border border-slate-800 text-center">
+                      <div className="p-2 border border-slate-800 text-center flex flex-col justify-center min-h-[60px]">
                         <span className="block text-[8px] font-black text-slate-500 uppercase mb-1 text-success">TAKE PROFIT</span>
                         <span className="text-lg font-black text-success italic tracking-tighter">
-                          {analysis.analysis.params?.tp_price ? `$${analysis.analysis.params.tp_price}` : '---'}
+                          {analysis.analysis.params?.tp_price ? `$${formatPrice(analysis.analysis.params.tp_price)}` : '---'}
                         </span>
+                        {analysis.analysis.params?.tp_desc && (
+                          <span className="text-[7px] text-slate-500 font-bold leading-tight mt-1">
+                            {analysis.analysis.params.tp_desc}
+                          </span>
+                        )}
                       </div>
-                      <div className="p-2 border border-slate-800 text-center">
+                      <div className="p-2 border border-slate-800 text-center flex flex-col justify-center min-h-[60px]">
                         <span className="block text-[8px] font-black text-slate-500 uppercase mb-1 text-danger">STOP LOSS</span>
                         <span className="text-lg font-black text-danger italic tracking-tighter">
-                           {analysis.analysis.params?.sl_price ? `$${analysis.analysis.params.sl_price}` : '---'}
+                          {analysis.analysis.params?.sl_price ? `$${formatPrice(analysis.analysis.params.sl_price)}` : '---'}
                         </span>
+                        {analysis.analysis.params?.sl_desc && (
+                          <span className="text-[7px] text-slate-500 font-bold leading-tight mt-1">
+                            {analysis.analysis.params.sl_desc}
+                          </span>
+                        )}
                       </div>
                     </div>
 
-                  {analysis.analysis.decision === 'HOLD' ? (
-                    <div className="mt-8 space-y-4">
-                      <div className="flex items-center gap-2 mb-2">
-                        <div className="h-[1px] flex-1 bg-slate-800"></div>
-                        <span className="text-[10px] font-black text-warning uppercase italic tracking-widest">Manual Override</span>
-                        <div className="h-[1px] flex-1 bg-slate-800"></div>
+                    {analysis.analysis.decision === 'HOLD' ? (
+                      <div className="mt-8 space-y-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="h-[1px] flex-1 bg-slate-800"></div>
+                          <span className="text-[10px] font-black text-warning uppercase italic tracking-widest">Manual Override</span>
+                          <div className="h-[1px] flex-1 bg-slate-800"></div>
+                        </div>
+                        <div className="flex gap-4">
+                          <button
+                            id="force-long-btn"
+                            onClick={() => handleExecute('LONG')}
+                            disabled={!isConnected || isRegistered === false}
+                            className="flex-1 neobrutal-button bg-success/20 hover:bg-success text-success hover:text-black p-4 font-black italic flex items-center justify-center gap-2 border-success/30 disabled:opacity-30"
+                          >
+                            <TrendingUp className="w-5 h-5" /> FORCE LONG
+                          </button>
+                          <button
+                            onClick={() => handleExecute('SHORT')}
+                            disabled={!isConnected || isRegistered === false}
+                            className="flex-1 neobrutal-button bg-danger/20 hover:bg-danger text-danger hover:text-black p-4 font-black italic flex items-center justify-center gap-2 border-danger/30 disabled:opacity-30"
+                          >
+                            <TrendingDown className="w-5 h-5" /> FORCE SHORT
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex gap-4">
-                        <button 
-                          onClick={() => handleExecute('LONG')}
-                          disabled={!isConnected || isRegistered === false}
-                          className="flex-1 neobrutal-button bg-success/20 hover:bg-success text-success hover:text-black p-4 font-black italic flex items-center justify-center gap-2 border-success/30 disabled:opacity-30"
-                        >
-                          <TrendingUp className="w-5 h-5" /> FORCE LONG
-                        </button>
-                        <button 
-                          onClick={() => handleExecute('SHORT')}
-                          disabled={!isConnected || isRegistered === false}
-                          className="flex-1 neobrutal-button bg-danger/20 hover:bg-danger text-danger hover:text-black p-4 font-black italic flex items-center justify-center gap-2 border-danger/30 disabled:opacity-30"
-                        >
-                          <TrendingDown className="w-5 h-5" /> FORCE SHORT
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button 
-                      className={`w-full mt-8 neobrutal-button p-6 text-xl flex items-center justify-center gap-4 disabled:opacity-50 ${
-                        (!isConnected || chainId !== valueChain.id || !isRegistered) ? 'bg-slate-800 cursor-not-allowed text-slate-600' :
-                        isConfirmed ? 'bg-success' : 'bg-success hover:bg-success/90'
-                      }`}
-                      onClick={() => {
-                        if (chainId !== valueChain.id) switchChain({ chainId: valueChain.id });
-                        else handleExecute();
-                      }}
-                      disabled={isExecuting || isSigning || !isConnected || (isConnected && isRegistered === false)}
-                    >
-                      {!isConnected ? (
-                        <>
-                          <Wallet className="w-6 h-6" />
-                          CONNECT WALLET
-                        </>
-                      ) : chainId !== valueChain.id ? (
-                        <>
-                          <AlertTriangle className="w-6 h-6 text-danger" />
-                          SWITCH TO VALUECHAIN
-                        </>
-                      ) : isRegistered === false ? (
-                        <>
-                          <AlertTriangle className="w-6 h-6 text-danger" />
-                          NOT REGISTERED ON SODEX
-                        </>
-                      ) : isExecuting || isSigning ? (
-                        <>
-                          <BrainCircuit className="animate-spin w-6 h-6" />
-                          {isSigning ? 'SIGNING MESSAGE...' : 'EXECUTING...'}
-                        </>
-                      ) : (
-                        <>
-                          <Zap className="w-6 h-6 fill-white" />
-                          EXECUTE ON-CHAIN
-                        </>
-                      )}
-                    </button>
-                  )}
+                    ) : (
+                      <button
+                        className={`w-full mt-8 neobrutal-button p-6 text-xl flex items-center justify-center gap-4 disabled:opacity-50 ${(!isConnected || chainId !== valueChain.id || !isRegistered) ? 'bg-slate-800 cursor-not-allowed text-slate-600' :
+                            isConfirmed ? 'bg-success' : 'bg-success hover:bg-success/90'
+                          }`}
+                        onClick={() => {
+                          if (chainId !== valueChain.id) switchChain({ chainId: valueChain.id });
+                          else handleExecute();
+                        }}
+                        disabled={isExecuting || isSigning || !isConnected || (isConnected && isRegistered === false)}
+                      >
+                        {!isConnected ? (
+                          <>
+                            <Wallet className="w-6 h-6" />
+                            CONNECT WALLET
+                          </>
+                        ) : chainId !== valueChain.id ? (
+                          <>
+                            <AlertTriangle className="w-6 h-6 text-danger" />
+                            SWITCH TO VALUECHAIN
+                          </>
+                        ) : isRegistered === false ? (
+                          <>
+                            <AlertTriangle className="w-6 h-6 text-danger" />
+                            NOT REGISTERED ON SODEX
+                          </>
+                        ) : isExecuting || isSigning ? (
+                          <>
+                            <BrainCircuit className="animate-spin w-6 h-6" />
+                            {isSigning ? 'SIGNING MESSAGE...' : 'EXECUTING...'}
+                          </>
+                        ) : (
+                          <>
+                            <Zap className="w-6 h-6 fill-white" />
+                            EXECUTE ON-CHAIN
+                          </>
+                        )}
+                      </button>
+                    )}
 
                     {hash && (
                       <div className="mt-4 p-3 bg-slate-800 border border-slate-700 text-xs font-mono break-all">
@@ -866,6 +1155,103 @@ export default function Dashboard() {
               )}
             </div>
           </section>
+
+          {/* AI DISCOVERY LOGS (NEW) */}
+          <section className="neobrutal-card p-4 bg-slate-900 border-slate-800">
+            <h2 className="text-sm font-black mb-4 flex items-center gap-2 uppercase tracking-widest text-slate-400">
+              <BrainCircuit className="w-4 h-4 text-accent" /> AI & NEWS DISCOVERY LOGS
+            </h2>
+
+            <div className="space-y-3">
+              {analysis ? (
+                <div className="neobrutal-card bg-slate-950 border-slate-800 overflow-hidden">
+                  <div className="bg-black p-3 border-b-2 border-slate-800 flex items-center gap-2">
+                    <BrainCircuit className="w-4 h-4 text-accent" />
+                    <h3 className="text-sm font-black italic tracking-widest uppercase text-white">AI & NEWS DISCOVERY LOGS</h3>
+                  </div>
+
+                  <div className="p-4 space-y-4">
+                    {/* STAGE 1: TECHNICAL ENGINE */}
+                    <div className="flex gap-4 items-start border-l-4 border-orange-500 bg-orange-500/5 p-4 relative group">
+                      <div className="flex-1">
+                        <div className="flex justify-between items-center mb-2">
+                          <div className="flex items-center gap-2">
+                            <Zap className="w-3 h-3 text-orange-500 fill-orange-500" />
+                            <span className="text-[10px] font-black text-white uppercase tracking-widest">STAGE 1: TECHNICAL RULE-BASED ENGINE</span>
+                          </div>
+                          <span className="text-[8px] font-black bg-slate-800 text-slate-400 px-2 py-0.5 rounded-sm uppercase tracking-widest">
+                            Indicator Engine
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-300 font-medium leading-relaxed italic mb-3">
+                          "{analysis.analysis?.technical_analysis || "Processing technical indicators..."}"
+                        </p>
+                        <div className="flex gap-4">
+                          <div className="text-[9px] font-bold uppercase text-slate-500">
+                            Signal: <span className={analysis.analysis?.decision !== 'HOLD' ? 'text-success' : 'text-warning'}>
+                              {analysis.analysis?.decision || '---'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* STAGE 2: AI VALIDATION */}
+                    <div className="flex gap-4 items-start border-l-4 border-green-500 bg-green-500/5 p-4 relative group">
+                      <div className="flex-1">
+                        <div className="flex justify-between items-center mb-2">
+                          <div className="flex items-center gap-2">
+                            <ShieldCheck className="w-3 h-3 text-green-500 fill-green-500" />
+                            <span className="text-[10px] font-black text-white uppercase tracking-widest">STAGE 2: AI RISK VALIDATION</span>
+                          </div>
+                          <span className="text-[8px] font-black bg-slate-800 text-slate-400 px-2 py-0.5 rounded-sm uppercase tracking-widest">
+                            {analysis.analysis?.analysis_model || 'Gemini 3.1'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-300 font-medium leading-relaxed italic mb-3">
+                          "{analysis.analysis?.reasoning || "AI is validating technical signal..."}"
+                        </p>
+                        <div className="flex gap-4">
+                          <div className="text-[9px] font-bold uppercase text-slate-500">
+                            Validation: <span className="text-white">{analysis.analysis?.decision !== 'HOLD' ? 'PASSED' : 'SAFE HOLD'}</span>
+                          </div>
+                          <div className="text-[9px] font-bold uppercase text-slate-500">
+                            Confidence: <span className="text-white">{analysis.analysis?.confidence || '0'}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* LATEST NEWS */}
+                    <div className="p-4 bg-black/40 border border-slate-800">
+                      <div className="flex items-center gap-2 mb-4">
+                        <MessageSquareQuote className="w-4 h-4 text-slate-500" />
+                        <span className="text-[10px] font-black text-white uppercase tracking-widest">LATEST NEWS AGGREGATION</span>
+                      </div>
+                      <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                        {analysis.news && analysis.news.length > 0 ? (
+                          analysis.news.map((item: any, idx: number) => (
+                            <div key={idx} className="flex gap-3 items-start group border-b border-slate-800/50 pb-2">
+                              <ChevronRight className="w-3 h-3 text-accent mt-1 flex-shrink-0 group-hover:translate-x-1 transition-transform" />
+                              <p className="text-[11px] text-slate-400 leading-relaxed font-medium group-hover:text-slate-200 transition-colors" 
+                                 dangerouslySetInnerHTML={{ __html: item.title }} />
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-[11px] text-slate-600 italic">No recent news discovered for this symbol.</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="py-8 text-center border border-dashed border-slate-800 bg-black/20">
+                  <BrainCircuit className="w-8 h-8 text-slate-800 mx-auto mb-2" />
+                  <p className="text-[10px] text-slate-600 font-bold uppercase tracking-widest">Waiting for analysis trigger...</p>
+                </div>
+              )}
+            </div>
+          </section>
         </div>
       </div>
 
@@ -877,33 +1263,31 @@ export default function Dashboard() {
               <h3 className="text-black font-black italic tracking-tighter text-2xl uppercase">Confirm Order</h3>
               <button onClick={() => setShowModal(false)} className="text-black font-black text-xl hover:scale-125 transition-transform">✕</button>
             </div>
-            
+
             <div className="p-8 space-y-6">
               {/* Order Summary Header */}
-              <div className={`p-4 border-2 border-black flex justify-between items-center ${
-                analysis.analysis.decision === 'LONG' ? 'bg-success/20 border-success' : 'bg-danger/20 border-danger'
-              }`}>
+              <div className={`p-4 border-2 border-black flex justify-between items-center ${(overrideSide || analysis.analysis?.decision) === 'LONG' ? 'bg-success/20 border-success' : 'bg-danger/20 border-danger'
+                }`}>
                 <div className="flex flex-col">
                   <span className="text-[10px] font-black text-slate-400 uppercase">Target Asset</span>
                   <span className="text-xl font-black italic">{symbol}</span>
                 </div>
                 <div className="text-right">
                   <span className="text-[10px] font-black text-slate-400 uppercase">Direction</span>
-                  <span className={`block text-2xl font-black italic ${
-                    analysis.analysis.decision === 'LONG' ? 'text-success' : 'text-danger'
-                  }`}>{analysis.analysis.decision}</span>
+                  <span className={`block text-2xl font-black italic ${(overrideSide || analysis.analysis?.decision) === 'LONG' ? 'text-success' : 'text-danger'
+                    }`}>{overrideSide || analysis.analysis?.decision}</span>
                 </div>
               </div>
 
               {/* Order Type Selector */}
               <div className="flex gap-2 p-1 bg-black border-2 border-slate-700">
-                <button 
+                <button
                   onClick={() => setExecOrderType(2)}
                   className={`flex-1 p-2 text-[10px] font-black uppercase transition-all ${execOrderType === 2 ? 'bg-accent text-black' : 'text-slate-500 hover:text-white'}`}
                 >
                   Market Price
                 </button>
-                <button 
+                <button
                   onClick={() => setExecOrderType(1)}
                   className={`flex-1 p-2 text-[10px] font-black uppercase transition-all ${execOrderType === 1 ? 'bg-accent text-black' : 'text-slate-500 hover:text-white'}`}
                 >
@@ -915,29 +1299,29 @@ export default function Dashboard() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <label className="text-xs font-black text-slate-500 uppercase">Margin (vUSDC)</label>
-                  <input 
-                    type="text" 
-                    value={marginUSD} 
+                  <input
+                    type="text"
+                    value={marginUSD}
                     onChange={(e) => setMarginUSD(e.target.value)}
                     className="w-full bg-black border-2 border-slate-700 p-3 text-white font-black focus:border-accent outline-none"
                   />
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs font-black text-slate-500 uppercase">Leverage (x)</label>
-                  <input 
-                    type="number" 
-                    value={execLeverage} 
+                  <input
+                    type="number"
+                    value={execLeverage}
                     onChange={(e) => setExecLeverage(parseInt(e.target.value))}
                     className="w-full bg-black border-2 border-slate-700 p-3 text-white font-black focus:border-accent outline-none"
                   />
                 </div>
-                
+
                 {execOrderType === 1 && (
                   <div className="col-span-2 space-y-2 animate-in slide-in-from-top-2 duration-200">
                     <label className="text-xs font-black text-warning uppercase italic">Entry Price (Limit)</label>
-                    <input 
-                      type="text" 
-                      value={execPrice} 
+                    <input
+                      type="text"
+                      value={execPrice}
                       onChange={(e) => setExecPrice(e.target.value)}
                       className="w-full bg-black border-4 border-warning p-3 text-white font-black focus:border-accent outline-none"
                     />
@@ -946,23 +1330,25 @@ export default function Dashboard() {
 
                 <div className="space-y-2">
                   <label className="text-xs font-black text-slate-500 uppercase text-success">Take Profit ($)</label>
-                  <input 
-                    type="text" 
-                    value={execTP} 
+                  <input
+                    type="text"
+                    value={execTP}
                     onChange={(e) => setExecTP(e.target.value)}
                     placeholder="Auto-suggested"
                     className="w-full bg-black border-2 border-slate-700 p-3 text-success font-black focus:border-success outline-none"
                   />
+                  {execTPDesc && <p className="text-[9px] text-slate-500 font-bold italic leading-tight">{execTPDesc}</p>}
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs font-black text-slate-500 uppercase text-danger">Stop Loss ($)</label>
-                  <input 
-                    type="text" 
-                    value={execSL} 
+                  <input
+                    type="text"
+                    value={execSL}
                     onChange={(e) => setExecSL(e.target.value)}
                     placeholder="Auto-suggested"
                     className="w-full bg-black border-2 border-slate-700 p-3 text-danger font-black focus:border-danger outline-none"
                   />
+                  {execSLDesc && <p className="text-[9px] text-slate-500 font-bold italic leading-tight">{execSLDesc}</p>}
                 </div>
               </div>
 
@@ -973,7 +1359,7 @@ export default function Dashboard() {
                   <span className="text-xs font-bold text-slate-400 uppercase">Est. Quantity ({symbol.split('-')[0]})</span>
                 </div>
                 <span className="text-lg font-black text-white italic">
-                  {( (parseFloat(marginUSD) * execLeverage) / parseFloat(analysis.current_price) ).toFixed(4)}
+                  {((parseFloat(marginUSD) * execLeverage) / parseFloat(analysis.current_price)).toFixed(4)}
                 </span>
               </div>
 
@@ -981,15 +1367,15 @@ export default function Dashboard() {
               <div className="flex flex-col gap-3 pt-4">
                 <div className="flex gap-4">
                   {/* Classic Order Hidden as requested */}
-                  <button 
-                    onClick={() => confirmExecute(analysis.analysis.decision as 'LONG' | 'SHORT')}
+                  <button
+                    onClick={() => confirmExecute((overrideSide || analysis.analysis.decision) as 'LONG' | 'SHORT')}
                     className="w-full p-4 border-2 border-black bg-success text-black font-black hover:bg-success/90 transition-colors uppercase tracking-widest text-xs flex items-center justify-center gap-2"
                   >
                     <ShieldCheck className="w-4 h-4" />
                     UNIFIED EXECUTE (SYNC LEVERAGE + ORDER)
                   </button>
                 </div>
-                <button 
+                <button
                   onClick={() => setShowModal(false)}
                   className="w-full p-2 border-2 border-black bg-black text-slate-500 font-black hover:text-white transition-colors uppercase tracking-widest text-[10px]"
                 >

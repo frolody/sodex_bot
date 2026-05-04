@@ -15,7 +15,10 @@ class DatabaseManager:
     def _init_db(self):
         print(f"Initializing Database at: {self.db_path}")
         conn = sqlite3.connect(self.db_path)
+        # Enable WAL mode for better concurrency (Multiple readers, One writer)
+        conn.execute("PRAGMA journal_mode=WAL")
         cursor = conn.cursor()
+
         
         # Table for Bot Status & Global Stats
         cursor.execute('''
@@ -84,9 +87,25 @@ class DatabaseManager:
                 account_id INTEGER,
                 symbol TEXT,
                 leverage INTEGER,
-                is_active INTEGER DEFAULT 0
+                is_active INTEGER DEFAULT 0,
+                gemini_api_key TEXT,
+                openrouter_api_key TEXT,
+                trading_mode TEXT DEFAULT 'MOMENTUM'
             )
         ''')
+        
+        # MIGRATION: Check if new columns exist, if not add them
+        cursor.execute("PRAGMA table_info(bot_config)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'gemini_api_key' not in columns:
+            cursor.execute("ALTER TABLE bot_config ADD COLUMN gemini_api_key TEXT")
+        if 'openrouter_api_key' not in columns:
+            cursor.execute("ALTER TABLE bot_config ADD COLUMN openrouter_api_key TEXT")
+        if 'trading_mode' not in columns:
+            cursor.execute("ALTER TABLE bot_config ADD COLUMN trading_mode TEXT DEFAULT 'MOMENTUM'")
+            
+        conn.commit()
 
         # Insert initial stats if empty
         cursor.execute("SELECT COUNT(*) FROM bot_stats")
@@ -120,23 +139,35 @@ class DatabaseManager:
         conn.commit()
         conn.close()
 
-    def save_config(self, address, private_key, account_id, symbol, leverage):
+    def update_trading_mode(self, address, mode):
+        if not address: return
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE bot_config SET trading_mode = ? WHERE wallet_address = ?", (mode, address.lower()))
+        conn.commit()
+        conn.close()
+
+    def save_config(self, address, private_key, account_id, symbol, leverage, gemini_key=None, openrouter_key=None, trading_mode='MOMENTUM'):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         address = address.lower()
         
         cursor.execute('''
-            INSERT INTO bot_config (wallet_address, private_key, account_id, symbol, leverage)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO bot_config (wallet_address, private_key, account_id, symbol, leverage, gemini_api_key, openrouter_api_key, trading_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(wallet_address) DO UPDATE SET
                 private_key=excluded.private_key,
                 account_id=excluded.account_id,
                 symbol=excluded.symbol,
-                leverage=excluded.leverage
-        ''', (address, private_key, account_id, symbol, leverage))
+                leverage=excluded.leverage,
+                gemini_api_key=COALESCE(excluded.gemini_api_key, bot_config.gemini_api_key),
+                openrouter_api_key=COALESCE(excluded.openrouter_api_key, bot_config.openrouter_api_key),
+                trading_mode=COALESCE(excluded.trading_mode, bot_config.trading_mode)
+        ''', (address, private_key, account_id, symbol, leverage, gemini_key, openrouter_key, trading_mode))
         
         conn.commit()
         conn.close()
+
 
     def add_trade_history(self, symbol, side, size, entry, exit_p, pnl):
         conn = sqlite3.connect(self.db_path)

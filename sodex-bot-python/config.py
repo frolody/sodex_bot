@@ -32,7 +32,7 @@ class Config:
     # Trading Logic
     TARGET_SYMBOL = os.getenv("TARGET_SYMBOL", "BTC-USD")
     TRADING_INTERVAL_SECONDS = int(os.getenv("TRADING_INTERVAL_SECONDS", "300"))
-    IMPORTANCE_THRESHOLD = int(os.getenv("IMPORTANCE_THRESHOLD", "7"))
+    IMPORTANCE_THRESHOLD = int(os.getenv("IMPORTANCE_THRESHOLD", "5"))
     DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", "10"))
 
     @staticmethod
