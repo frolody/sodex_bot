@@ -21,7 +21,7 @@ class Config:
     SODEX_CHAIN_ID = int(os.getenv("SODEX_CHAIN_ID", "138565"))
     
     # Sodex Core
-    SODEX_PRIVATE_KEY = os.getenv("EVM_WALLET_PRIVATE_KEY") if SODEX_TESTNET else os.getenv("SODEX_PRIVATE_KEY")
+    SODEX_PRIVATE_KEY = os.getenv("EVM_WALLET_PRIVATE_KEY") or os.getenv("SODEX_PRIVATE_KEY")
     SODEX_API_KEY = os.getenv("SODEX_API_KEY") # THE PUBLIC KEY 0x6036...
     SODEX_API_NAME = os.getenv("API_KEY_NAME") # THE LABEL FROLODY_KEY
     SODEX_ACCOUNT_ID = int(os.getenv("SODEX_ACCOUNT_ID", "4739"))
@@ -31,7 +31,7 @@ class Config:
     
     # Trading Logic
     TARGET_SYMBOL = os.getenv("TARGET_SYMBOL", "BTC-USD")
-    TRADING_INTERVAL_SECONDS = int(os.getenv("TRADING_INTERVAL_SECONDS", "300"))
+    TRADING_INTERVAL_SECONDS = int(os.getenv("TRADING_INTERVAL_SECONDS", "60"))
     IMPORTANCE_THRESHOLD = int(os.getenv("IMPORTANCE_THRESHOLD", "5"))
     DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", "10"))
 

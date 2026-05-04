@@ -136,7 +136,9 @@ async def analyze_market(
             raise HTTPException(status_code=404, detail="Price not found")
 
         klines = await retry_async(client.get_klines, symbol, interval="15m", limit=50)
-        news = await retry_async(news_agg.fetch_latest_news, symbol.split("-")[0])
+        # Normalize symbol for news (e.g., BTC-USD -> BTC)
+        news_sym = symbol.split("-")[0]
+        news = news_agg.fetch_latest_news(news_sym, limit=20)
         news_text = "\n".join([f"- {n['title']}" for n in news]) if news else ""
 
         # Fetch Market Intelligence
@@ -184,12 +186,12 @@ async def analyze_market(
     
 @app.get("/api/chart/klines")
 async def get_market_klines(symbol: str, interval: str = "15m", limit: int = 100):
-    klines = client.get_klines(symbol, interval, limit)
+    klines = await retry_async(client.get_klines, symbol, interval, limit)
     return {"klines": klines}
 
 @app.get("/api/markets")
 async def get_available_markets():
-    markets = client.get_markets()
+    markets = await retry_async(client.get_markets)
     return {"markets": markets}
 
 @app.get("/api/settings")
@@ -203,7 +205,8 @@ def get_settings(address: Optional[str] = Query(None)):
         "account_id": config["account_id"] if config else Config.SODEX_ACCOUNT_ID,
         "gemini_api_key": config["gemini_api_key"] if config else "",
         "openrouter_api_key": config["openrouter_api_key"] if config else "",
-        "trading_mode": config["trading_mode"] if config and "trading_mode" in config.keys() else "MOMENTUM"
+        "trading_mode": config["trading_mode"] if config and "trading_mode" in config.keys() else "MOMENTUM",
+        "last_auto_log": config["last_auto_log"] if config and "last_auto_log" in config.keys() else "Waiting for next scan..."
     }
 
 @app.post("/api/settings/save")
@@ -227,8 +230,10 @@ async def save_settings(req: Request):
 
 
 @app.post("/api/settings/toggle")
-def toggle_auto_trading(address: str, active: bool):
-    if db: db.toggle_bot_active(address, active)
+async def toggle_auto_trading(address: str = Query(...), active: bool = Query(...)):
+    if db: 
+        print(f">>> API: Toggling Bot for {address} to {active}")
+        db.toggle_bot_active(address, active)
     return {"status": "success", "is_active": active}
 
 @app.get("/api/stats")

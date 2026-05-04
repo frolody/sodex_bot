@@ -7,8 +7,12 @@ from web3 import Web3
 class SodexAuth:
     @staticmethod
     def create_signature(private_key: str, method: str, params: dict, api_name: str, api_nonce: int, chain_id: int, api_public_key: str = None) -> str:
+        from collections import OrderedDict
         # 1. PAYLOAD HASH FROM BYTES
-        payload = {"type": method, "params": params}
+        payload = OrderedDict([
+            ("type", method),
+            ("params", params)
+        ])
         compact_json = json.dumps(payload, separators=(',', ':'))
         payload_bytes = compact_json.encode()
         payload_hash = Web3.keccak(payload_bytes)

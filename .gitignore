@@ -33,3 +33,6 @@ Thumbs.db
 sodex-bot-python/.env
 sodex-dashboard-nextjs/.env
 sodex-dashboard-nextjs/.env.local
+*.db
+*.db-shm
+*.db-wal

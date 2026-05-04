@@ -90,13 +90,18 @@ class DatabaseManager:
                 is_active INTEGER DEFAULT 0,
                 gemini_api_key TEXT,
                 openrouter_api_key TEXT,
-                trading_mode TEXT DEFAULT 'MOMENTUM'
+                trading_mode TEXT DEFAULT 'MOMENTUM',
+                last_auto_log TEXT
             )
         ''')
         
         # MIGRATION: Check if new columns exist, if not add them
         cursor.execute("PRAGMA table_info(bot_config)")
         columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'last_auto_log' not in columns:
+            cursor.execute("ALTER TABLE bot_config ADD COLUMN last_auto_log TEXT")
+            print(">>> DATABASE: Added last_auto_log column")
         
         if 'gemini_api_key' not in columns:
             cursor.execute("ALTER TABLE bot_config ADD COLUMN gemini_api_key TEXT")
@@ -144,6 +149,14 @@ class DatabaseManager:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute("UPDATE bot_config SET trading_mode = ? WHERE wallet_address = ?", (mode, address.lower()))
+        conn.commit()
+        conn.close()
+
+    def save_auto_log(self, address, log_text):
+        if not address: return
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE bot_config SET last_auto_log = ? WHERE wallet_address = ?", (log_text, address.lower()))
         conn.commit()
         conn.close()
 

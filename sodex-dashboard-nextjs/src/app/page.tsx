@@ -71,6 +71,7 @@ export default function Dashboard() {
   const [geminiKey, setGeminiKey] = useState<string>('');
   const [openrouterKey, setOpenrouterKey] = useState<string>('');
   const [tradingMode, setTradingMode] = useState<string>('MOMENTUM');
+  const [lastAutoLog, setLastAutoLog] = useState<string>('');
   const [showPK, setShowPK] = useState(false);
   // 3. Precise Price Formatter for low-priced tokens
   const formatPrice = (price: any) => {
@@ -131,6 +132,17 @@ export default function Dashboard() {
     }
   }, [isConnected, address]);
 
+  // 4. Polling for Auto-Trading Logs
+  useEffect(() => {
+    let interval: any;
+    if (autoTrading && address) {
+      interval = setInterval(() => {
+        fetchSettings(address);
+      }, 10000); // Poll every 10s for logs
+    }
+    return () => clearInterval(interval);
+  }, [autoTrading, address]);
+
   const getBaseUrl = () => {
     if (typeof window !== 'undefined') {
       return `http://${window.location.hostname}:8000`;
@@ -149,6 +161,7 @@ export default function Dashboard() {
       if (data.gemini_api_key) setGeminiKey(data.gemini_api_key);
       if (data.openrouter_api_key) setOpenrouterKey(data.openrouter_api_key);
       if (data.trading_mode) setTradingMode(data.trading_mode);
+      if (data.last_auto_log) setLastAutoLog(data.last_auto_log);
     } catch (err) { console.error(err); }
   };
 
@@ -928,10 +941,15 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="bg-black/40 p-6 border-l-4 border-accent italic text-slate-400">
-                  <p className="text-sm leading-relaxed">
-                    "Bot is currently monitoring global news and technical indicators.
-                    <span className="text-white font-bold ml-1">Status: Waiting for momentum.</span>
-                    The system will automatically execute orders when the AI Signal Score exceeds the threshold."
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-1.5 h-1.5 bg-accent rounded-full animate-pulse"></div>
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">REAL-TIME AUTONOMOUS ENGINE LOG</span>
+                  </div>
+                  <p className="text-sm leading-relaxed text-slate-200">
+                    "{lastAutoLog || "Bot is currently monitoring global news and technical indicators. Waiting for next scan..."}"
+                  </p>
+                  <p className="mt-4 text-[10px] text-slate-600 font-bold uppercase tracking-widest border-t border-slate-800 pt-2">
+                    The system will automatically execute orders when the AI Signal Score exceeds the threshold.
                   </p>
                 </div>
                 <div className="mt-6 flex gap-4">

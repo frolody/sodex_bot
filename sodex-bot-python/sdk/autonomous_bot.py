@@ -22,6 +22,7 @@ class AutonomousBot:
         self.market_intel = MarketIntelligence()
         self.is_running = False
         self.stop_event = asyncio.Event()
+        self.active_tasks = {} # Track running tasks per user
 
     async def start_loop(self):
         if self.is_running:
@@ -43,18 +44,28 @@ class AutonomousBot:
                 conn.close()
 
                 if not active_users:
-                    # print("No active users to process.")
-                    await asyncio.sleep(10)
+                    interval = Config.TRADING_INTERVAL_SECONDS
+                    print(f">>> AUTONOMOUS ENGINE: No active users. Checking again in {interval}s...")
+                    try:
+                        await asyncio.wait_for(self.stop_event.wait(), timeout=interval)
+                    except asyncio.TimeoutError:
+                        pass
                     continue
 
-                # 2. Spawn a Parallel Task for each User
+                # 2. Spawn a Parallel Task for each User if not already running
                 for user_conf in active_users:
-                    asyncio.create_task(self.process_user_trade(user_conf))
+                    addr = user_conf.get("wallet_address")
+                    if addr in self.active_tasks and not self.active_tasks[addr].done():
+                        print(f"--- Task for {addr[:6]} still running. Skipping this cycle. ---")
+                        continue
+                    
+                    self.active_tasks[addr] = asyncio.create_task(self.process_user_trade(user_conf))
                 
-                # Global cycle sleep (e.g., scan all users every 2 minutes)
-                # This ensures we don't spam API keys too hard
+                # Global cycle sleep using config
+                interval = Config.TRADING_INTERVAL_SECONDS
+                print(f">>> AUTONOMOUS ENGINE: Cycle complete. Sleeping for {interval}s...")
                 try:
-                    await asyncio.wait_for(self.stop_event.wait(), timeout=120)
+                    await asyncio.wait_for(self.stop_event.wait(), timeout=interval)
                 except asyncio.TimeoutError:
                     pass
             except Exception as e:
@@ -73,8 +84,16 @@ class AutonomousBot:
             if not private_key: return
             
             master_addr = SodexAuth.recover_address(private_key)
+            print(f">>> AUTONOMOUS: Starting analysis for {master_addr[:6]} ({SYMBOL})")
             
-            # Use User-Specific API Keys if available
+            # CRITICAL: Create a NEW isolated client for this user to avoid parallel conflicts
+            user_client = SodexClient(
+                is_spot=False, 
+                private_key=private_key,
+                api_key_name=master_addr # On testnet, API name is usually the address
+            )
+            
+            # Use User-Specific API Keys if available for AI
             user_gemini = conf.get("gemini_api_key")
             user_openrouter = conf.get("openrouter_api_key")
             custom_keys = {
@@ -83,55 +102,22 @@ class AutonomousBot:
             }
             
             # 3. Check Position State
-            state_resp = self.client.get_perps_state(master_addr)
-            has_pos = False
+            state_resp = user_client.get_perps_state(master_addr)
+            active_pos = None
             if state_resp and state_resp.get("code") == 0 and state_resp.get("data"):
                 positions = state_resp["data"].get("P") or []
-                has_pos = any(pos["s"] == SYMBOL and float(pos.get("sz", 0)) != 0 for pos in positions)
+                for pos in positions:
+                    if pos["s"] == SYMBOL and float(pos.get("sz", 0)) != 0:
+                        active_pos = pos
+                        break
 
-            if has_pos:
-                # print(f"USER {master_addr[:6]}: Already has {SYMBOL} position. Skipping.")
-                return
-
-            # 4. SCANNING & ANALYSIS
-            p_str = self.client.get_mark_price(SYMBOL)
-            if not p_str: return
-
-            klines = self.client.get_klines(SYMBOL, interval="15m", limit=20)
-            news = self.news_agg.fetch_latest_news(SYMBOL)
-            news_text = "\n".join([f"- {n['title']}" for n in news]) if news else ""
-            intel_data = self.market_intel.get_comprehensive_intel(SYMBOL.split("-")[0])
-
-            # Fetch Balance for Risk Scaling
-            balance_val = "100"
-            try:
-                bal_data = self.client.get_perps_balance(master_addr)
-                balance_val = str(bal_data)
-            except: pass
-
-            risk_profile = conf.get("risk_profile", "SAFETY").upper()
-            mode = conf.get('trading_mode', 'MOMENTUM')
-            print(f"PARALLEL-BOT: User {master_addr[:6]} analyzing with {mode} mode...")
-            
-            # AI Analysis (Pass custom keys)
-            result = self.strategy.analyze(
-                SYMBOL, p_str, klines, news_text, intel_data,
-                mode=mode,
-                risk_profile=risk_profile,
-                custom_keys=custom_keys
-            )
-            decision = result.get("decision", "HOLD")
-            
-            if decision not in ["LONG", "SHORT"]:
-                return
-
-            # 5. EXECUTION LOGIC (Official Metadata-Aware)
+            # 4. FETCH MARKET METADATA (Needed for rounding)
             import requests
             symbol_id = 1
             tick_size = 0.01
             step_size = 0.1
             try:
-                sym_url = f"{self.client.base_url}/markets/symbols?symbol={SYMBOL}"
+                sym_url = f"{user_client.base_url}/markets/symbols?symbol={SYMBOL}"
                 resp = requests.get(sym_url, timeout=5)
                 if resp.status_code == 200:
                     meta_data = resp.json().get("data", [])
@@ -142,9 +128,35 @@ class AutonomousBot:
                         step_size = float(meta.get("stepSize") or 0.1)
             except: pass
 
-            params = result.get("params", {})
-            risk_leverage = int(params.get("leverage") or Config.DEFAULT_LEVERAGE)
-            risk_margin_pct = float(params.get("margin_percent") or 10) / 100.0
+            # 5. SCANNING & ANALYSIS (Always run even if pos exists)
+            p_str = user_client.get_mark_price(SYMBOL)
+            if not p_str: return
+            p_float = float(p_str)
+
+            klines = user_client.get_klines(SYMBOL, interval="15m", limit=50)
+            news_sym = SYMBOL.split("-")[0]
+            news = self.news_agg.fetch_latest_news(news_sym, limit=20)
+            news_text = "\n".join([f"- {n['title']}" for n in news]) if news else ""
+            intel_data = self.market_intel.get_comprehensive_intel(news_sym)
+
+            # Fetch Balance
+            balance_val = "100"
+            try:
+                bal_data = user_client.get_perps_balance(master_addr)
+                balance_val = str(bal_data)
+            except: pass
+
+            risk_profile = conf.get("risk_profile", "SAFETY").upper()
+            mode = conf.get('trading_mode', 'MOMENTUM')
+            
+            # AI Analysis
+            result = self.strategy.analyze(
+                SYMBOL, p_str, klines, news_text, intel_data,
+                mode=mode, risk_profile=risk_profile, custom_keys=custom_keys
+            )
+            decision = result.get("decision", "HOLD")
+            ai_score = result.get("confidence", 0)
+            tech_log = result.get("technical_analysis", "Analyzing market...")
             
             from decimal import Decimal, ROUND_HALF_UP
             def round_step(value, step):
@@ -156,10 +168,68 @@ class AutonomousBot:
                 rounded = (d_val / d_step).to_integral_value(rounding=ROUND_HALF_UP) * d_step
                 return f"{rounded:.{precision}f}".rstrip('0').rstrip('.')
 
-            print(f"PARALLEL-BOT: User {master_addr[:6]} triggering {decision} for {SYMBOL}")
+            # 6. ACTIVE POSITION MANAGEMENT LOGIC
+            if active_pos:
+                cur_side = int(active_pos.get("sd") or 1) # 1=LONG, 2=SHORT
+                cur_size = float(active_pos.get("sz") or 0)
+                entry_p = float(active_pos.get("ep") or p_float)
+                
+                print(f">>> OVERSIGHT [{master_addr[:6]}]: Active {SYMBOL} {'LONG' if cur_side==1 else 'SHORT'}. AI Score: {ai_score}")
+
+                # FEATURE 1: TREND REVERSAL (Close & Reverse)
+                is_reversal = (cur_side == 1 and decision == "SHORT") or (cur_side == 2 and decision == "LONG")
+                if is_reversal and ai_score >= 0.75:
+                    print(f"⚠️ REVERSAL DETECTED! Closing {SYMBOL} and switching sides.")
+                    user_client.close_position(account_id, symbol_id, cur_side, cur_size)
+                    self.db.add_log(f"Reversal! Closed {SYMBOL} to switch to {decision}", "auto")
+                    active_pos = None # Allow to open new position below
+                
+                # FEATURE 2: SENTIMENT DEGRADATION (Defense)
+                elif ai_score < 0.4:
+                    print(f"🛡️ SENTIMENT DROPPED ({ai_score}). Tightening Stop Loss to Break-Even.")
+                    # Tighten SL to entry + 0.1% buffer
+                    new_sl = entry_p * 1.001 if cur_side == 1 else entry_p * 0.999
+                    clean_sl = round_step(new_sl, tick_size)
+                    
+                    # EXECUTE: Update TP/SL on exchange
+                    user_client.update_position_tpsl(
+                        account_id, symbol_id, cur_side, cur_size,
+                        tp_price=None, # Keep old TP or None
+                        sl_price=clean_sl
+                    )
+                    
+                    self.db.save_auto_log(master_addr, f"{SYMBOL}: Sentiment weak. Tightening SL to {clean_sl}")
+                    return
+
+                # FEATURE 3: PYRAMIDING (Scale-In)
+                elif ai_score >= 0.95:
+                    print(f"🔥 SUPER SIGNAL ({ai_score}). Scaling in to existing position.")
+                    # Add 30% more size for momentum scaling
+                    scale_qty = cur_size * 0.3
+                    clean_scale_qty = round_step(scale_qty, step_size)
+                    
+                    if float(clean_scale_qty) > 0:
+                        user_client.place_order(
+                            account_id, symbol_id, cur_side, 
+                            order_type=2, quantity=clean_scale_qty, 
+                            price="0", reduce_only=False
+                        )
+                        self.db.save_auto_log(master_addr, f"{SYMBOL}: Momentum strong. Scaled in {clean_scale_qty}")
+                    return
+
+                else:
+                    self.db.save_auto_log(master_addr, f"{SYMBOL}: Maintaining position. AI Confidence: {ai_score}")
+                    return
+
+            # 7. NEW POSITION EXECUTION (Only if active_pos is None)
+            if decision not in ["LONG", "SHORT"]:
+                return
+
+            params = result.get("params", {})
+            risk_leverage = int(params.get("leverage") or Config.DEFAULT_LEVERAGE)
+            risk_margin_pct = float(params.get("margin_percent") or 10) / 100.0
             
             side = 1 if decision == "LONG" else 2
-            p_float = float(p_str)
             tp_price = str(params.get("tp_price") or "")
             sl_price = str(params.get("sl_price") or "")
             
@@ -175,12 +245,11 @@ class AutonomousBot:
             qty = (bal * risk_margin_pct * risk_leverage) / p_float
             clean_qty = round_step(qty, step_size)
             
-            self.db.add_log(f"Auto-Trade [{master_addr[:6]}]: {decision} {SYMBOL} at {clean_price} (Qty:{clean_qty})", "auto")
+            self.db.add_log(f"Auto-Trade [{master_addr[:6]}]: Opening {decision} {SYMBOL} at {clean_price}", "auto")
             
-            self.client.place_order_with_tpsl(
+            user_client.place_order_with_tpsl(
                 account_id, symbol_id, side, 2, clean_qty, clean_price, 
-                clean_tp, clean_sl, 
-                leverage=risk_leverage
+                clean_tp, clean_sl, leverage=risk_leverage
             )
 
         except Exception as e:

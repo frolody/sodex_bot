@@ -12,7 +12,6 @@ class SodexClient:
         self.chain_id = Config.SODEX_CHAIN_ID
         self.api_key_name = api_key_name or Config.SODEX_API_NAME
         
-        # Only try to recover address if private_key exists
         if not self.api_key_name and self.private_key:
             self.api_key_name = SodexAuth.recover_address(self.private_key)
         
@@ -20,6 +19,45 @@ class SodexClient:
         
         domain = "testnet-gw" if Config.SODEX_TESTNET else "mainnet-gw"
         self.base_url = f"https://{domain}.sodex.dev/api/v1/perps"
+
+    def _post_trade(self, method: str, params: dict, path: str = "trade/orders", nonce: int = None, http_method: str = "POST"):
+        if not nonce:
+            nonce = int(time.time() * 1000)
+        
+        signature = SodexAuth.create_signature(
+            private_key=self.private_key,
+            method=method,
+            params=params,
+            api_name=self.api_key_name,
+            api_nonce=nonce,
+            chain_id=self.chain_id,
+            api_public_key=self.api_public_key
+        )
+
+        headers = {
+            "Content-Type":  "application/json",
+            "Accept":        "application/json",
+            "X-API-Sign":    signature,
+            "X-API-Nonce":   str(nonce),
+        }
+        
+        if self.api_key_name and not Config.SODEX_TESTNET:
+            headers["X-API-Key"] = str(self.api_key_name)
+
+        url = f"{self.base_url}/{path}"
+        json_body = json.dumps(params, separators=(',', ':'))
+        
+        try:
+            print(f"DEBUG _POST_TRADE [{http_method}] URL: {url}")
+            if http_method.upper() == "DELETE":
+                resp = requests.delete(url, data=json_body, headers=headers, timeout=10)
+            else:
+                resp = requests.post(url, data=json_body, headers=headers, timeout=10)
+                
+            print(f"DEBUG _POST_TRADE RESP: {resp.status_code} - {resp.text}")
+            return resp.json()
+        except Exception as e:
+            return {"code": -1, "error": f"Network Error: {str(e)}"}
 
     def place_order(
         self,
@@ -37,7 +75,7 @@ class SodexClient:
         is_market = int(order_type) == 2
         
         order_item = OrderedDict([
-            ("clOrdID",      f"{account_id}-{t}"),
+            ("clOrdID",      str(t)),
             ("modifier",     int(modifier)),
             ("side",         int(side)),
             ("type",         int(order_type)),
@@ -47,7 +85,6 @@ class SodexClient:
             ("positionSide", int(position_side))
         ])
 
-        # Insert price before quantity for Limit orders
         if not is_market:
             new_order = OrderedDict()
             for k, v in order_item.items():
@@ -64,115 +101,196 @@ class SodexClient:
 
         return self._post_trade("newOrder", params, nonce=t)
 
-    def place_order_with_tpsl(
-        self,
-        account_id:    int,
-        symbol_id:     int,
-        side:          int,
-        order_type:    int,
-        quantity:      str,
-        price:         str,
-        tp_price:      str,
-        sl_price:      str,
-        position_side: int  = 1,
-    ) -> dict:
+    def modify_orders(self, account_id: int, symbol_id: int, modifies_list: list):
+        if not modifies_list: return {"code": -1, "msg": "No modifications"}
         t = int(time.time() * 1000)
-        is_market = int(order_type) == 2
         
-        parent = OrderedDict([
-            ("clOrdID",      f"{account_id}-{t}-p"),
-            ("modifier",     3), # BRACKET
-            ("side",         int(side)),
-            ("type",         int(order_type)),
-            ("timeInForce",  3 if is_market else 1),
-            ("quantity",     str(quantity)),
-            ("reduceOnly",   False),
-            ("positionSide", int(position_side))
-        ])
-        
-        # Insert price before quantity for Limit orders
-        if not is_market:
-            # We need to recreate to insert at correct position
-            new_parent = OrderedDict()
-            for k, v in parent.items():
-                if k == "quantity":
-                    new_parent["price"] = str(price)
-                new_parent[k] = v
-            parent = new_parent
-
-        tp = OrderedDict([
-            ("clOrdID",      f"{account_id}-{t}-tp"),
-            ("modifier",     4), # ATTACHED_STOP
-            ("side",         2 if side == 1 else 1),
-            ("type",         2), # MARKET
-            ("timeInForce",  3), # IOC
-            ("quantity",     str(quantity)),
-            ("stopPrice",    str(tp_price)),
-            ("stopType",     2), # TAKE_PROFIT
-            ("triggerType",  2), # MARK_PRICE
-            ("reduceOnly",   True),
-            ("positionSide", int(position_side))
-        ])
-
-        sl = OrderedDict([
-            ("clOrdID",      f"{account_id}-{t}-sl"),
-            ("modifier",     4), # ATTACHED_STOP
-            ("side",         2 if side == 1 else 1),
-            ("type",         2), # MARKET
-            ("timeInForce",  3), # IOC
-            ("quantity",     str(quantity)),
-            ("stopPrice",    str(sl_price)),
-            ("stopType",     1), # STOP_LOSS
-            ("triggerType",  2), # MARK_PRICE
-            ("reduceOnly",   True),
-            ("positionSide", int(position_side))
-        ])
+        items = []
+        for m in modifies_list:
+            item = OrderedDict()
+            item["symbolID"] = int(symbol_id)
+            # Add identity (either orderID or clOrdID)
+            if "orderID" in m: item["orderID"] = int(m["orderID"])
+            elif "clOrdID" in m: item["clOrdID"] = str(m["clOrdID"])
+            
+            # Add updated fields
+            if "price" in m: item["price"] = str(m["price"])
+            if "quantity" in m: item["quantity"] = str(m["quantity"])
+            if "stopPrice" in m: item["stopPrice"] = str(m["stopPrice"])
+            items.append(item)
 
         params = OrderedDict([
             ("accountID", int(account_id)),
             ("symbolID",  int(symbol_id)),
-            ("orders",    [parent, tp, sl])
+            ("modifies",  items)
         ])
+        return self._post_trade("modifyOrder", params, path="trade/orders/modify", nonce=t, http_method="POST")
 
-        return self._post_trade("newOrder", params, nonce=t)
-
-    def _post_trade(self, method: str, params: dict):
-        nonce = int(time.time() * 1000)
+    def cancel_orders(self, account_id: int, symbol_id: int, order_ids: list):
+        if not order_ids: return {"code": -1, "msg": "No order IDs"}
+        t = int(time.time() * 1000)
         
-        signature = SodexAuth.create_signature(
-            private_key=self.private_key,
-            method=method,
-            params=params,
-            api_name=self.api_key_name,
-            api_nonce=nonce,
-            chain_id=self.chain_id,
-            api_public_key=self.api_public_key
-        )
+        cancel_list = []
+        for oid in order_ids:
+            cancel_list.append(OrderedDict([
+                ("symbolID", int(symbol_id)),
+                ("orderID",  int(oid))
+            ]))
 
-        # BEST KNOWN HEADER CONFIGURATION
-        headers = {
-            "Content-Type":  "application/json",
-            "Accept":        "application/json",
-            "X-API-Sign":    signature,
-            "X-API-Nonce":   str(nonce),
-        }
-        
-        if not Config.SODEX_TESTNET:
-            headers["X-API-Key"] = str(self.api_key_name)
-            headers["Authorization"] = f"Bearer {self.api_key_name}"
+        params = OrderedDict([
+            ("accountID", int(account_id)),
+            ("cancels",   cancel_list)
+        ])
+        return self._post_trade("cancelOrder", params, nonce=t, http_method="DELETE")
 
-        url = f"{self.base_url}/trade/orders"
-        json_body = json.dumps(params, separators=(',', ':'))
+    def update_position_tpsl(self, account_id: int, symbol_id: str, side: int = None, quantity: str = None, tp_price: str = None, sl_price: str = None):
+        """
+        Dynamically updates TP/SL for a position.
+        Uses modifyOrder if orders exist, otherwise uses newOrder with modifier 2.
+        """
+        symbol_info = self.get_symbol_info(symbol_id)
+        actual_symbol_id = symbol_info["id"]
         
+        raw_orders = self.get_perps_orders(SodexAuth.recover_address(self.private_key), account_id)
+        data = raw_orders.get("data", {}) if isinstance(raw_orders, dict) else {}
+        existing_orders = data.get("orders", []) if isinstance(data, dict) else []
+        
+        print(f"DEBUG: Found {len(existing_orders)} total open orders.")
+        
+        tp_order = None
+        sl_order = None
+        
+        modifies = []
+        to_cancel = []
+        for o in existing_orders:
+            if not isinstance(o, dict): continue
+            s = o.get("s") or o.get("symbol")
+            if s != symbol_id: continue
+            
+            oid = o.get("i") or o.get("orderID")
+            if oid: to_cancel.append(oid)
+            
+            st = o.get("st") or o.get("stopType")
+            if st in [2, "TAKE_PROFIT"]: tp_order = o
+            elif st in [1, "STOP_LOSS"]: sl_order = o
+
+        if tp_order and tp_price:
+            oid = tp_order.get("i") or tp_order.get("orderID")
+            if oid:
+                modifies.append({"orderID": int(oid), "stopPrice": str(tp_price)})
+        if sl_order and sl_price:
+            oid = sl_order.get("i") or sl_order.get("orderID")
+            if oid:
+                modifies.append({"orderID": int(oid), "stopPrice": str(sl_price)})
+
+        if modifies:
+            print(f">>>> SODEX: Modifying {len(modifies)} existing TP/SL orders...")
+            res = self.modify_orders(account_id, actual_symbol_id, modifies)
+            if res.get("code") == 0: return res
+            print(f"MODIFY FAILED: {res.get('error') or res.get('msg')}. Cleaning up instead.")
+
+        if to_cancel:
+            print(f">>>> SODEX: Cleaning up {len(to_cancel)} old TP/SL orders...")
+            self.cancel_orders(account_id, actual_symbol_id, to_cancel)
+            time.sleep(0.5)
+
+        # Fallback: Place new TP/SL
+        # If quantity/side not provided, fetch from position
+        if not side or not quantity:
+            pos_data = self.get_perps_positions(SodexAuth.recover_address(self.private_key), account_id)
+            positions = pos_data.get("data", []) if isinstance(pos_data, dict) else []
+            target_pos = next((p for p in positions if (p.get("s") or p.get("symbol")) == symbol_id), None)
+            
+            if not target_pos:
+                return {"code": -1, "msg": f"No open position found for {symbol_id}"}
+                
+            quantity = abs(float(target_pos.get("sz") or target_pos.get("size") or 0))
+            side = 1 if float(target_pos.get("sz") or 0) > 0 else 2
+        
+        opp_side = 2 if int(side) == 1 else 1
+        
+        t = int(time.time() * 1000)
+        final_res = {"code": 0, "msg": "No updates needed"}
+        
+        if tp_price:
+            print(f">>>> SODEX: Placing new TP @ {tp_price}")
+            tp_payload = OrderedDict([
+                ("accountID", int(account_id)),
+                ("symbolID",  int(actual_symbol_id)),
+                ("orders", [OrderedDict([
+                    ("clOrdID", f"{t}-tp"),
+                    ("modifier", 2),
+                    ("side", opp_side),
+                    ("type", 2),
+                    ("timeInForce", 3),
+                    ("quantity", str(quantity)),
+                    ("stopPrice", str(tp_price)),
+                    ("stopType", 2),
+                    ("triggerType", 2),
+                    ("reduceOnly", True),
+                    ("positionSide", 1)
+                ])])
+            ])
+            final_res = self._post_trade("newOrder", tp_payload, nonce=t)
+            time.sleep(0.2)
+            
+        if sl_price:
+            t2 = int(time.time() * 1000) + 5
+            print(f">>>> SODEX: Placing new SL @ {sl_price}")
+            sl_payload = OrderedDict([
+                ("accountID", int(account_id)),
+                ("symbolID",  int(actual_symbol_id)),
+                ("orders", [OrderedDict([
+                    ("clOrdID", f"{t2}-sl"),
+                    ("modifier", 2),
+                    ("side", opp_side),
+                    ("type", 2),
+                    ("timeInForce", 3),
+                    ("quantity", str(quantity)),
+                    ("stopPrice", str(sl_price)),
+                    ("stopType", 1),
+                    ("triggerType", 2),
+                    ("reduceOnly", True),
+                    ("positionSide", 1)
+                ])])
+            ])
+            final_res = self._post_trade("newOrder", sl_payload, nonce=t2)
+
+        return final_res
+
+    def get_symbol_info(self, symbol_name: str) -> dict:
         try:
-            print(f"DEBUG _POST_TRADE URL: {url}")
-            print(f"DEBUG _POST_TRADE HEADERS: {json.dumps(headers, indent=2)}")
-            print(f"DEBUG _POST_TRADE BODY: {json_body}")
-            resp = requests.post(url, data=json_body, headers=headers, timeout=10)
-            print(f"DEBUG _POST_TRADE RESP: {resp.status_code} - {resp.text}")
-            return resp.json()
+            resp = requests.get(f"{self.base_url}/markets/symbols", timeout=5).json()
+            symbols = resp.get("data", [])
+            for s in symbols:
+                if s.get("name") == symbol_name:
+                    return {
+                        "id": int(s.get("id", 1)),
+                        "tickSize": float(s.get("tickSize", 1.0)),
+                        "stepSize": float(s.get("stepSize", 0.00001))
+                    }
         except Exception as e:
-            return {"code": -1, "error": f"Network Error: {str(e)}"}
+            print(f"DEBUG: Error in get_symbol_info: {e}")
+        return {"id": 1, "tickSize": 1.0, "stepSize": 0.00001}
+
+    def get_mark_price(self, symbol: str) -> str | None:
+        try:
+            url = f"{self.base_url}/markets/tickers"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                for t in data.get("data", []):
+                    if t.get("symbol") == symbol or t.get("s") == symbol: 
+                        return t.get("markPrice") or t.get("mp") or t.get("p")
+        except: pass
+        return None
+
+    def get_tickers(self):
+        try:
+            url = f"{self.base_url}/markets/tickers"
+            resp = requests.get(url, timeout=5)
+            return resp.json().get("data", [])
+        except: return []
 
     def get_klines(self, symbol: str, interval: str = "1m", limit: int = 50):
         try:
@@ -191,18 +309,6 @@ class SodexClient:
             print(f"DEBUG FETCH_KLINES EXCEPTION: {e}")
             return []
 
-    def get_mark_price(self, symbol: str) -> str | None:
-        try:
-            url = f"{self.base_url}/markets/tickers"
-            resp = requests.get(url, timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                for t in data.get("data", []):
-                    if t.get("symbol") == symbol or t.get("s") == symbol: 
-                        return t.get("markPrice") or t.get("mp") or t.get("p")
-        except: pass
-        return None
-
     def get_markets(self) -> list:
         try:
             url = f"{self.base_url}/markets/tickers"
@@ -212,7 +318,6 @@ class SodexClient:
                 tickers = data.get("data", [])
                 
                 # Sort by quoteVolume (qv or quoteVolume field) descending
-                # This gives better liquidity info than base volume
                 sorted_tickers = sorted(
                     tickers, 
                     key=lambda x: float(x.get("quoteVolume") or x.get("qv") or 0), 
@@ -226,29 +331,16 @@ class SodexClient:
         except: pass
         return ["BTC-USD", "ETH-USD", "SOL-USD"] # Fallback
 
-    def get_balance(self, address: str):
+    def get_perps_balances(self, address: str):
         try:
-            url = f"https://testnet-gw.sodex.dev/api/v1/spot/accounts/{address}/state"
-            resp = requests.get(url, timeout=5)
-            return resp.json()
-        except: return {"error": "balance error"}
-
-    def get_perps_balance(self, address: str):
-        state = self.get_perps_state(address)
-        if state and state.get("code") == 0:
-            return float(state["data"].get("av", 0)) # Available margin
-        return 0.0
-
-    def get_perps_state(self, address: str):
-        try:
-            url = f"{self.base_url}/accounts/{address}/state"
+            url = f"{self.base_url}/accounts/{address}/balances"
             resp = requests.get(url, timeout=5)
             return resp.json()
         except: return None
 
-    def get_perps_balances(self, address: str):
+    def get_perps_state(self, address: str):
         try:
-            url = f"{self.base_url}/accounts/{address}/balances"
+            url = f"{self.base_url}/accounts/{address}/state"
             resp = requests.get(url, timeout=5)
             return resp.json()
         except: return None
@@ -258,8 +350,7 @@ class SodexClient:
             url = f"{self.base_url}/accounts/{address}/positions"
             params = {}
             if account_id: params["accountID"] = account_id
-            resp = requests.get(url, params=params, timeout=5)
-            return resp.json()
+            return requests.get(url, params=params, timeout=5).json()
         except: return None
 
     def get_perps_orders(self, address: str, account_id: int = None):
@@ -267,119 +358,17 @@ class SodexClient:
             url = f"{self.base_url}/accounts/{address}/orders"
             params = {}
             if account_id: params["accountID"] = account_id
-            resp = requests.get(url, params=params, timeout=5)
-            return resp.json()
+            return requests.get(url, params=params, timeout=5).json()
         except: return None
 
-    def cancel_orders(self, account_id: int, symbol_id: int, order_ids: list):
-        if not order_ids: return
-        
-        cancel_items = []
-        for oid in order_ids:
-            cancel_items.append(OrderedDict([("orderID", int(oid))]))
-
-        params = OrderedDict([
-            ("accountID", int(account_id)),
-            ("symbolID",  int(symbol_id)),
-            ("cancel",    cancel_items)
-        ])
-
-        return self._delete_trade("trade/orders", params)
-
-    def _delete_trade(self, path: str, params: dict):
-        nonce = int(time.time() * 1000)
-        signature = SodexAuth.create_signature(
-            private_key=self.private_key,
-            method="cancelOrder", # For Perps, cancelOrder is the method for DELETE
-            params=params,
-            api_name=self.api_key_name,
-            api_nonce=nonce,
-            chain_id=self.chain_id,
-            api_public_key=self.api_public_key
-        )
-
-        headers = {
-            "Content-Type":  "application/json",
-            "Accept":        "application/json",
-            "X-API-Sign":    signature,
-            "X-API-Nonce":   str(nonce),
-        }
-        
-        if not Config.SODEX_TESTNET:
-            headers["X-API-Key"] = str(self.api_key_name)
-            headers["Authorization"] = f"Bearer {self.api_key_name}"
-
-        url = f"{self.base_url}/{path}"
-        json_body = json.dumps(params, separators=(',', ':'))
-        
-        try:
-            resp = requests.delete(url, data=json_body, headers=headers, timeout=10)
-            return resp.json()
-        except:
-            return {"code": -1, "error": "Network Error"}
-
-    def place_perps_order(self, account_id, symbol_id=1, side=1, order_type=1,
-                          quantity="0.01", price="75000", position_side=1, reduce_only=False):
-        return self.place_order(account_id, symbol_id, side, order_type,
-                                quantity, price, position_side, reduce_only)
-
     def execute_order(self, payload: dict, signature: str, nonce: int = None):
-        """
-        Executes an order that was signed externally (e.g. by a browser wallet)
-        """
-        if not nonce:
-            # Try to extract nonce from payload if possible, or use current time
-            nonce = int(time.time() * 1000)
+        n = nonce or int(time.time() * 1000)
+        h = {"Content-Type": "application/json", "Accept": "application/json", "X-API-Sign": signature, "X-API-Nonce": str(n)}
+        if self.api_key_name and not Config.SODEX_TESTNET: h["X-API-Key"] = str(self.api_key_name)
+        return requests.post(f"{self.base_url}/trade/orders", data=json.dumps(payload.get("params", payload), separators=(',', ':')), headers=h, timeout=10).json()
 
-        headers = {
-            "Content-Type":  "application/json",
-            "Accept":        "application/json",
-            "X-API-Sign":    signature,
-            "X-API-Nonce":   str(nonce),
-        }
-        
-        if not Config.SODEX_TESTNET:
-            headers["X-API-Key"] = str(self.api_key_name)
-            headers["Authorization"] = f"Bearer {self.api_key_name}"
-
-        url = f"{self.base_url}/trade/orders"
-        json_body = json.dumps(payload.get("params", payload), separators=(',', ':'))
-        
-        try:
-            print(f"DEBUG EXECUTE URL: {url}")
-            print(f"DEBUG EXECUTE HEADERS: {json.dumps(headers, indent=2)}")
-            print(f"DEBUG EXECUTE BODY: {json_body}")
-            resp = requests.post(url, data=json_body, headers=headers, timeout=10)
-            print(f"DEBUG EXECUTE RESP: {resp.status_code} - {resp.text}")
-            return resp.json()
-        except Exception as e:
-            return {"code": -1, "error": f"Network Error: {str(e)}"}
     def execute_leverage(self, payload: dict, signature: str, nonce: int = None):
-        """
-        Updates leverage for a symbol (Signed Write)
-        """
-        if not nonce:
-            nonce = int(time.time() * 1000)
-
-        headers = {
-            "Content-Type":  "application/json",
-            "Accept":        "application/json",
-            "X-API-Sign":    signature,
-            "X-API-Nonce":   str(nonce),
-        }
-        
-        if not Config.SODEX_TESTNET:
-            headers["X-API-Key"] = str(self.api_key_name)
-            headers["Authorization"] = f"Bearer {self.api_key_name}"
-
-        url = f"{self.base_url}/trade/leverage"
-        json_body = json.dumps(payload.get("params", payload), separators=(',', ':'))
-        
-        try:
-            print(f"DEBUG LEVERAGE URL: {url}")
-            print(f"DEBUG LEVERAGE BODY: {json_body}")
-            resp = requests.post(url, data=json_body, headers=headers, timeout=10)
-            print(f"DEBUG LEVERAGE RESP: {resp.status_code} - {resp.text}")
-            return resp.json()
-        except Exception as e:
-            return {"code": -1, "error": f"Network Error: {str(e)}"}
+        n = nonce or int(time.time() * 1000)
+        h = {"Content-Type": "application/json", "Accept": "application/json", "X-API-Sign": signature, "X-API-Nonce": str(n)}
+        if not Config.SODEX_TESTNET: h["X-API-Key"] = str(self.api_key_name)
+        return requests.post(f"{self.base_url}/trade/leverage", data=json.dumps(payload.get("params", payload), separators=(',', ':')), headers=h, timeout=10).json()
