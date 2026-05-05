@@ -114,18 +114,19 @@ class AutonomousBot:
             # 4. FETCH MARKET METADATA (Needed for rounding)
             import requests
             symbol_id = 1
-            tick_size = 0.01
-            step_size = 0.1
+            tick_size = 0.1
+            step_size = 0.0001 # Corrected default for BTC-USD
             try:
-                sym_url = f"{user_client.base_url}/markets/symbols?symbol={SYMBOL}"
+                sym_url = f"{user_client.base_url}/markets/symbols"
                 resp = requests.get(sym_url, timeout=5)
                 if resp.status_code == 200:
                     meta_data = resp.json().get("data", [])
-                    if meta_data:
-                        meta = meta_data[0]
-                        symbol_id = int(meta.get("symbolID") or meta.get("id") or 1)
-                        tick_size = float(meta.get("tickSize") or 0.01)
-                        step_size = float(meta.get("stepSize") or 0.1)
+                    for meta in meta_data:
+                        if meta.get("name") == SYMBOL:
+                            symbol_id = int(meta.get("id") or 1)
+                            tick_size = float(meta.get("tickSize") or 0.1)
+                            step_size = float(meta.get("stepSize") or 0.0001)
+                            break
             except: pass
 
             # 5. SCANNING & ANALYSIS (Always run even if pos exists)
@@ -245,7 +246,11 @@ class AutonomousBot:
             qty = (bal * risk_margin_pct * risk_leverage) / p_float
             clean_qty = round_step(qty, step_size)
             
-            self.db.add_log(f"Auto-Trade [{master_addr[:6]}]: Opening {decision} {SYMBOL} at {clean_price}", "auto")
+            if float(clean_qty) <= 0:
+                print(f"ABORT [{master_addr[:6]}]: Calculated quantity ({qty}) is too small for step_size ({step_size}).")
+                return
+
+            self.db.add_log(f"Auto-Trade [{master_addr[:6]}]: Opening {decision} {SYMBOL} Qty:{clean_qty} at {clean_price}", "auto")
             
             user_client.place_order_with_tpsl(
                 account_id, symbol_id, side, 2, clean_qty, clean_price, 
