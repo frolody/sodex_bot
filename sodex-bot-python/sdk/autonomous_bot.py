@@ -205,6 +205,7 @@ class AutonomousBot:
                 # FEATURE 3: PYRAMIDING (Scale-In)
                 elif ai_score >= 0.95:
                     print(f"🔥 SUPER SIGNAL ({ai_score}). Scaling in to existing position.")
+                    print(f"DEBUG [{master_addr[:6]}]: Current Size: {cur_size} | Available Bal: {balance_val}")
                     # Add 30% more size for momentum scaling
                     scale_qty = cur_size * 0.3
                     clean_scale_qty = round_step(scale_qty, step_size)
