@@ -342,6 +342,11 @@ class SodexClient:
             if data and data.get("code") == 0:
                 balances = data.get("data", [])
                 if balances:
+                    # Search for USDT or USD or the first balance with a positive value
+                    for b in balances:
+                        asset = b.get("symbol", "").upper()
+                        if "USD" in asset or "USDT" in asset:
+                            return float(b.get("balance", 0))
                     return float(balances[0].get("balance", 0))
         except: pass
         return 0.0
