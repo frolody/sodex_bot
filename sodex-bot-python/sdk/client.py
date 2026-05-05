@@ -143,6 +143,16 @@ class SodexClient:
         ])
         return self._post_trade("cancelOrder", params, nonce=t, http_method="DELETE")
 
+    def update_leverage(self, account_id: int, symbol_id: int, leverage: int, margin_mode: int = 2):
+        t = int(time.time() * 1000)
+        params = OrderedDict([
+            ("accountID",  int(account_id)),
+            ("symbolID",   int(symbol_id)),
+            ("leverage",   int(leverage)),
+            ("marginMode", int(margin_mode))
+        ])
+        return self._post_trade("updateLeverage", params, path="trade/leverage", nonce=t)
+
     def update_position_tpsl(self, account_id: int, symbol_id: str, side: int = None, quantity: str = None, tp_price: str = None, sl_price: str = None):
         """
         Dynamically updates TP/SL for a position.
