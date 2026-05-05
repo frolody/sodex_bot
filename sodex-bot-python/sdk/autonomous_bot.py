@@ -252,13 +252,14 @@ class AutonomousBot:
 
             self.db.add_log(f"Auto-Trade [{master_addr[:6]}]: Opening {decision} {SYMBOL} Qty:{clean_qty} at {clean_price}", "auto")
             
-            # STEP A: Sync Leverage First
-            try:
-                print(f">>> AUTONOMOUS: Syncing leverage to x{risk_leverage} for {SYMBOL}")
-                user_client.update_leverage(account_id, symbol_id, risk_leverage)
-                time.sleep(0.5) # Small grace period
-            except Exception as le:
-                print(f"Leverage Sync Warning: {le}")
+            # STEP A: Sync Leverage First (ONLY if no position is open)
+            if not active_pos:
+                try:
+                    print(f">>> AUTONOMOUS: Syncing leverage to x{risk_leverage} for {SYMBOL}")
+                    user_client.update_leverage(account_id, symbol_id, risk_leverage)
+                    time.sleep(0.5) 
+                except Exception as le:
+                    print(f"Leverage Sync Warning: {le}")
 
             # STEP B: Place Order with TP/SL
             user_client.place_order_with_tpsl(
