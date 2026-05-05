@@ -350,7 +350,6 @@ class SodexClient:
         try:
             data = self.get_perps_balances(address)
             if data and data.get("code") == 0:
-                # Based on api.py logic: balance is in data['balances']
                 data_body = data.get("data", {})
                 balances = []
                 if isinstance(data_body, dict):
@@ -361,12 +360,11 @@ class SodexClient:
                 if balances:
                     for b in balances:
                         asset = str(b.get("symbol", b.get("asset", ""))).upper()
-                        # Use 'total' field as seen in api.py, fallback to others
-                        val = float(b.get("total", b.get("balance", b.get("amount", 0))))
+                        # PRIORITIZE 'available' for trading, fallback to 'total'
+                        val = float(b.get("available", b.get("availableBalance", b.get("total", b.get("balance", 0)))))
                         if "USD" in asset or "USDT" in asset:
                             return val
-                    # Fallback to first asset if no USD found
-                    return float(balances[0].get("total", balances[0].get("balance", 0)))
+                    return float(balances[0].get("available", balances[0].get("total", 0)))
         except Exception as e:
             print(f"DEBUG BALANCE ERROR: {e}")
         return 0.0
