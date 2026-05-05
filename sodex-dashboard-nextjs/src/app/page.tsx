@@ -666,8 +666,10 @@ export default function Dashboard() {
                     </span>
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-[8px] font-black text-slate-500 uppercase">Live Date</span>
-                    <span className="text-[10px] font-bold text-slate-400">{new Date().toLocaleDateString()}</span>
+                    <span className="text-[8px] font-black text-slate-500 uppercase">Initial Margin</span>
+                    <span className="text-[10px] font-bold text-accent">
+                      {pos.margin && pos.margin !== "0" ? `$${formatPrice(pos.margin)}` : '---'}
+                    </span>
                   </div>
                   <div className="flex flex-col">
                     <span className="text-[8px] font-black text-slate-500 uppercase">Last Update</span>
