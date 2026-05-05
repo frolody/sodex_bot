@@ -339,16 +339,19 @@ class SodexClient:
     def get_perps_balance(self, address: str) -> float:
         try:
             data = self.get_perps_balances(address)
+            print(f"DEBUG BALANCE RESP: {data}")
             if data and data.get("code") == 0:
                 balances = data.get("data", [])
                 if balances:
-                    # Search for USDT or USD or the first balance with a positive value
                     for b in balances:
-                        asset = b.get("symbol", "").upper()
+                        asset = str(b.get("symbol", b.get("asset", ""))).upper()
+                        val = float(b.get("balance", b.get("amount", b.get("available", 0))))
+                        print(f"DEBUG ASSET: {asset} | VALUE: {val}")
                         if "USD" in asset or "USDT" in asset:
-                            return float(b.get("balance", 0))
+                            return val
                     return float(balances[0].get("balance", 0))
-        except: pass
+        except Exception as e:
+            print(f"DEBUG BALANCE ERROR: {e}")
         return 0.0
 
     def get_symbol_info(self, symbol_name: str) -> dict:
