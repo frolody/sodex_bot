@@ -348,33 +348,39 @@ class SodexClient:
 
     def get_perps_balance(self, address: str) -> float:
         try:
-            data = self.get_perps_balances(address)
-            # EXTREME DEBUG: Print the whole thing to see the field names
-            print(f">>> SODEX RAW BALANCE RESP: {json.dumps(data)}")
+            # Use /state endpoint for more accurate margin awareness
+            url = f"{self.base_url}/accounts/{address}/state"
+            resp = requests.get(url, timeout=5)
+            data = resp.json()
             
             if data and data.get("code") == 0:
+                body = data.get("data", {})
+                # 'av' is Equity/Account Value, 'cm' is Current Margin used
+                equity = float(body.get("av", 0))
+                margin_used = float(body.get("cm", 0))
+                
+                # Available Margin = Equity - Used Margin
+                available = equity - margin_used
+                
+                print(f"DEBUG MARGIN [{address[:6]}]: Equity: {equity} | Used: {margin_used} | Available: {available}")
+                return max(0.0, available)
+                
+        except Exception as e:
+            print(f"DEBUG BALANCE ERROR (state): {e}")
+            
+        # Fallback to balances if state fails
+        try:
+            data = self.get_perps_balances(address)
+            if data and data.get("code") == 0:
                 data_body = data.get("data", {})
-                balances = []
-                if isinstance(data_body, dict):
-                    balances = data_body.get("balances", [])
-                elif isinstance(data_body, list):
-                    balances = data_body
-
+                balances = data_body.get("balances", []) if isinstance(data_body, dict) else data_body
                 if balances:
                     for b in balances:
                         asset = str(b.get("symbol", b.get("asset", ""))).upper()
-                        # Try EVERY possible margin field name
-                        available = b.get("available") or b.get("availableBalance") or b.get("freeMargin") or b.get("withdrawable")
-                        total = b.get("total") or b.get("balance") or b.get("amount") or 0
-                        
-                        val = float(available if available is not None else total)
-                        print(f"DEBUG ASSET: {asset} | AVAIL: {available} | TOTAL: {total} | FINAL: {val}")
-                        
                         if "USD" in asset or "USDT" in asset:
-                            return val
-                    return float(balances[0].get("available", balances[0].get("total", 0)))
-        except Exception as e:
-            print(f"DEBUG BALANCE ERROR: {e}")
+                            # If no available field, it's just wallet balance, which is risky
+                            return float(b.get("available", 0))
+        except: pass
         return 0.0
 
     def get_symbol_info(self, symbol_name: str) -> dict:
