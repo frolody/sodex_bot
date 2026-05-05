@@ -266,11 +266,14 @@ class SodexClient:
         quantity: str,
         price: str,
         tp_price: str = None,
-        sl_price: str = None
+        sl_price: str = None,
+        leverage: int = None
     ) -> dict:
         """
         Atomic entry: Places a Parent order (modifier 3) with attached TP/SL (modifier 4).
         """
+        # If leverage is provided, we could call set_leverage here if needed, 
+        # but usually it's set before calling this.
         t = int(time.time() * 1000)
         is_market = int(order_type) == 2
         
