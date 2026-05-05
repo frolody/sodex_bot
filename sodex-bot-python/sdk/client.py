@@ -349,6 +349,9 @@ class SodexClient:
     def get_perps_balance(self, address: str) -> float:
         try:
             data = self.get_perps_balances(address)
+            # EXTREME DEBUG: Print the whole thing to see the field names
+            print(f">>> SODEX RAW BALANCE RESP: {json.dumps(data)}")
+            
             if data and data.get("code") == 0:
                 data_body = data.get("data", {})
                 balances = []
@@ -360,8 +363,13 @@ class SodexClient:
                 if balances:
                     for b in balances:
                         asset = str(b.get("symbol", b.get("asset", ""))).upper()
-                        # PRIORITIZE 'available' for trading, fallback to 'total'
-                        val = float(b.get("available", b.get("availableBalance", b.get("total", b.get("balance", 0)))))
+                        # Try EVERY possible margin field name
+                        available = b.get("available") or b.get("availableBalance") or b.get("freeMargin") or b.get("withdrawable")
+                        total = b.get("total") or b.get("balance") or b.get("amount") or 0
+                        
+                        val = float(available if available is not None else total)
+                        print(f"DEBUG ASSET: {asset} | AVAIL: {available} | TOTAL: {total} | FINAL: {val}")
+                        
                         if "USD" in asset or "USDT" in asset:
                             return val
                     return float(balances[0].get("available", balances[0].get("total", 0)))
