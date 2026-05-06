@@ -7,11 +7,23 @@ class NewsAggregator:
         self.sosovalue_key = Config.SOSOVALUE_API_KEY
         self.cp_url = "https://cryptopanic.com/api/v1/posts/"
         self.soso_url = "https://api.sosovalue.com/v1/news" # Placeholder URL
+        self._cache = {} # Format: {currency: (timestamp, results)}
+        self._cache_expiry = 900 # 15 minutes
 
     def fetch_latest_news(self, currency="BTC", limit=5):
         """
-        Fetches news from SoSoValue (Primary) and CryptoPanic (Fallback)
+        Fetches news from SoSoValue (Primary) and CryptoPanic (Fallback) with 15-min caching.
         """
+        import time
+        currency = currency.upper()
+        
+        # Check Cache
+        now = time.time()
+        if currency in self._cache:
+            ts, results = self._cache[currency]
+            if now - ts < self._cache_expiry:
+                print(f"DEBUG NEWS: Using Cached News for {currency} (Age: {int(now-ts)}s)")
+                return results
         news_results = []
         
         # 1. Try SoSoValue (Official Featured News)
@@ -91,4 +103,8 @@ class NewsAggregator:
             except Exception as e:
                 print(f"CryptoPanic Fetch Error: {e}")
         
+        if news_results:
+            import time
+            self._cache[currency] = (time.time(), news_results)
+            
         return news_results

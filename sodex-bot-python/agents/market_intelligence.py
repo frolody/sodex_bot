@@ -1,11 +1,14 @@
 import requests
 import os
 from config import Config
+import time
 
 class MarketIntelligence:
     def __init__(self):
         self.api_key = Config.SOSOVALUE_API_KEY
         self.base_url = "https://openapi.sosovalue.com/openapi/v1"
+        self._cache = {} # Format: {symbol: (timestamp, data)}
+        self._cache_expiry = 3600 # 1 hour
 
     def _get_headers(self):
         return {
@@ -15,9 +18,18 @@ class MarketIntelligence:
 
     def get_etf_flows(self, symbol="BTC"):
         """
-        Fetches the latest ETF net inflow/outflow data.
-        Mandatory parameter: country_code (e.g., 'US')
+        Fetches the latest ETF net inflow/outflow data with 1-hour caching.
         """
+        symbol = symbol.upper()
+        
+        # Check Cache
+        now = time.time()
+        if symbol in self._cache:
+            ts, data = self._cache[symbol]
+            if now - ts < self._cache_expiry:
+                print(f"DEBUG SOSO ETF: Using Cached Data for {symbol} (Age: {int(now-ts)}s)")
+                return data
+
         if not self.api_key:
             return None
         
@@ -45,12 +57,15 @@ class MarketIntelligence:
                 history = data.get("data", [])
                 if history:
                     latest = history[0]
-                    return {
+                    result = {
                         "net_inflow": float(latest.get("total_net_inflow", 0)),
                         "cum_net_inflow": float(latest.get("cum_net_inflow", 0)),
                         "total_assets": float(latest.get("total_net_assets", 0)),
                         "date": latest.get("date")
                     }
+                    # Update Cache
+                    self._cache[symbol] = (time.time(), result)
+                    return result
             else:
                 print(f"DEBUG SOSO ETF ERROR: {resp.text}")
         except Exception as e:
