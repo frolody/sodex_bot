@@ -99,6 +99,8 @@ export default function Dashboard() {
   const [execSLDesc, setExecSLDesc] = useState("");
   const [execPrice, setExecPrice] = useState("");
   const [execOrderType, setExecOrderType] = useState(2); // 2 = MARKET, 1 = LIMIT
+  const [activeSymbol, setActiveSymbol] = useState<string | null>(null);
+  const [isClosing, setIsClosing] = useState(false);
   const [activeNonce, setActiveNonce] = useState<number>(0);
   const [overrideSide, setOverrideSide] = useState<'LONG' | 'SHORT' | null>(null);
   const [riskProfile, setRiskProfile] = useState<'SAFETY' | 'MODERATE' | 'AGGRESSIVE'>('SAFETY');
@@ -607,78 +609,183 @@ export default function Dashboard() {
         </div>
       </header>
 
-      {/* Position HUD (Replacement for Table) */}
-      <div className="mb-6">
+      {/* Position HUD with Tabs & Total PnL */}
+      <div className="mb-6 space-y-4">
         {stats?.positions && stats.positions.length > 0 ? (
-          stats.positions.map((pos: any, idx: number) => (
-            <div key={idx} className="neobrutal-card bg-slate-900 border-l-8 border-l-success overflow-hidden animate-in fade-in slide-in-from-top-2 duration-300">
-              <div className="flex flex-col md:flex-row items-stretch">
-                {/* Left: Asset Info */}
-                <div className="bg-black/40 p-4 border-r border-slate-800 flex flex-col justify-center min-w-[140px]">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">LIVE TRADE</span>
-                    <div className="w-2 h-2 bg-success rounded-full animate-ping"></div>
-                  </div>
-                  <h3 className="text-2xl font-black italic text-white tracking-tighter leading-none">{pos.symbol}</h3>
-                  <div className="mt-2 flex items-center gap-2">
-                    <span className={`text-[9px] font-black px-1.5 py-0.5 ${pos.side === 'LONG' ? 'bg-success text-black' : 'bg-danger text-white'}`}>
-                      {pos.side}
-                    </span>
-                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">x{pos.leverage} LEVERAGE</span>
-                  </div>
+          <>
+            {/* 1. Total PnL Summary Bar */}
+            <div className="neobrutal-card bg-black border-slate-800 p-4 flex flex-col md:flex-row justify-between items-center gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-accent/10 border border-accent/20 rounded-xl">
+                  <BarChart3 className="w-6 h-6 text-accent" />
                 </div>
-
-                {/* Middle: Live PnL */}
-                <div className="flex-1 p-4 flex flex-col justify-center items-center md:items-start border-r border-slate-800 bg-gradient-to-r from-transparent to-success/5">
-                  <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">UNREALIZED PNL</span>
-                  <div className={`text-4xl font-black italic tracking-tighter ${(parseFloat(pos.unrealized_pnl) || 0) >= 0 ? 'text-success' : 'text-danger'
-                    }`}>
-                    {(parseFloat(pos.unrealized_pnl) || 0) >= 0 ? '+' : ''}
-                    {(parseFloat(pos.unrealized_pnl) || 0).toFixed(2)}
-                    <span className="text-sm ml-1 not-italic opacity-50">vUSDC</span>
-                  </div>
+                <div>
+                  <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Portfolio Performance</h4>
+                  <p className="text-sm font-bold text-white uppercase">Active Positions: {stats.positions.length}</p>
                 </div>
+              </div>
 
-                {/* Right: Price Details Grid */}
-                <div className="p-4 bg-black/20 grid grid-cols-2 gap-x-8 gap-y-2 min-w-[300px]">
-                  <div className="flex flex-col">
-                    <span className="text-[8px] font-black text-slate-500 uppercase">Entry Price</span>
-                    <span className="text-xs font-mono text-white">
-                      {pos.entry_price && pos.entry_price !== "0" ? `$${formatPrice(pos.entry_price)}` : '---'}
-                    </span>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-[8px] font-black text-slate-500 uppercase">Mark Price</span>
-                    <span className="text-xs font-mono text-accent animate-pulse">
-                      {pos.mark_price && pos.mark_price !== "0" ? `$${formatPrice(pos.mark_price)}` : '---'}
-                    </span>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-[8px] font-black text-slate-500 uppercase text-success">Take Profit</span>
-                    <span className="text-[10px] font-black text-success italic">
-                      {pos.tp_price && pos.tp_price !== "---" ? `$${formatPrice(pos.tp_price)}` : 'NOT SET'}
-                    </span>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-[8px] font-black text-slate-500 uppercase text-danger">Stop Loss</span>
-                    <span className="text-[10px] font-black text-danger italic">
-                      {pos.sl_price && pos.sl_price !== "---" ? `$${formatPrice(pos.sl_price)}` : 'NOT SET'}
-                    </span>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-[8px] font-black text-slate-500 uppercase">Initial Margin</span>
-                    <span className="text-[10px] font-bold text-accent">
-                      {pos.margin && pos.margin !== "0" ? `$${formatPrice(pos.margin)}` : '---'}
-                    </span>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-[8px] font-black text-slate-500 uppercase">Last Update</span>
-                    <span className="text-[10px] font-bold text-slate-400">{new Date().toLocaleTimeString()}</span>
-                  </div>
+              <div className="text-center md:text-right">
+                <span className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Total Unrealized PnL</span>
+                <div className={`text-3xl font-black italic tracking-tighter ${
+                  stats.positions.reduce((acc: number, p: any) => acc + (parseFloat(p.unrealized_pnl) || 0), 0) >= 0 
+                  ? 'text-success' : 'text-danger'
+                }`}>
+                  {stats.positions.reduce((acc: number, p: any) => acc + (parseFloat(p.unrealized_pnl) || 0), 0) >= 0 ? '+' : ''}
+                  {stats.positions.reduce((acc: number, p: any) => acc + (parseFloat(p.unrealized_pnl) || 0), 0).toFixed(2)}
+                  <span className="text-xs ml-1 not-italic opacity-50">vUSDC</span>
                 </div>
               </div>
             </div>
-          ))
+
+            {/* 2. Mini Tabs Row */}
+            <div className="flex flex-wrap gap-2">
+              {[...(stats.positions || [])].sort((a, b) => a.symbol.localeCompare(b.symbol)).map((pos: any) => (
+                <button
+                  key={pos.symbol}
+                  onClick={() => {
+                    console.log("Switching to position:", pos.symbol);
+                    setActiveSymbol(pos.symbol);
+                  }}
+                  className={`neobrutal-card p-3 flex items-center gap-4 transition-all min-w-[160px] relative z-10 ${
+                    (activeSymbol === pos.symbol || (!activeSymbol && stats.positions[0]?.symbol === pos.symbol))
+                    ? 'bg-slate-800 border-accent ring-2 ring-accent shadow-[4px_4px_0px_0px_rgba(234,179,8,1)]' 
+                    : 'bg-slate-900/50 border-slate-800 hover:border-slate-700 opacity-70 hover:opacity-100'
+                  }`}
+                >
+                  <div className={`w-1.5 h-8 ${pos.side === 'LONG' ? 'bg-success' : 'bg-danger'}`}></div>
+                  <div className="text-left">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-black text-white">{pos.symbol}</span>
+                      <span className={`text-[8px] font-black px-1 ${pos.side === 'LONG' ? 'bg-success/20 text-success' : 'bg-danger/20 text-danger'}`}>
+                        {pos.side}
+                      </span>
+                    </div>
+                    <div className={`text-sm font-black italic ${parseFloat(pos.unrealized_pnl) >= 0 ? 'text-success' : 'text-danger'}`}>
+                      {parseFloat(pos.unrealized_pnl) >= 0 ? '+' : ''}{parseFloat(pos.unrealized_pnl).toFixed(2)}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            {/* 3. Active Position Detail Card */}
+            {(() => {
+                const sortedPos = [...(stats.positions || [])].sort((a, b) => a.symbol.localeCompare(b.symbol));
+                const pos = sortedPos.find(p => p.symbol === activeSymbol) || sortedPos[0];
+                if (!pos) return null;
+                return (
+                  <div className="neobrutal-card bg-slate-900 border-l-8 border-l-success overflow-hidden animate-in fade-in slide-in-from-top-2 duration-300">
+                    <div className="flex flex-col md:flex-row items-stretch">
+                      {/* Left: Asset Info */}
+                      <div className="bg-black/40 p-4 border-r border-slate-800 flex flex-col justify-center min-w-[140px]">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">DETAILED VIEW</span>
+                          <div className="w-2 h-2 bg-success rounded-full animate-ping"></div>
+                        </div>
+                        <h3 className="text-2xl font-black italic text-white tracking-tighter leading-none">{pos.symbol}</h3>
+                        <div className="mt-2 flex items-center gap-2">
+                          <span className={`text-[9px] font-black px-1.5 py-0.5 ${pos.side === 'LONG' ? 'bg-success text-black' : 'bg-danger text-white'}`}>
+                            {pos.side}
+                          </span>
+                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">x{pos.leverage} LEVERAGE</span>
+                        </div>
+                      </div>
+
+                      {/* Middle: Live PnL */}
+                      <div className="flex-1 p-4 flex flex-col justify-center items-center md:items-start border-r border-slate-800 bg-gradient-to-r from-transparent to-success/5">
+                        <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">POSITION PNL</span>
+                        <div className={`text-4xl font-black italic tracking-tighter ${(parseFloat(pos.unrealized_pnl) || 0) >= 0 ? 'text-success' : 'text-danger'}`}>
+                          {(parseFloat(pos.unrealized_pnl) || 0) >= 0 ? '+' : ''}
+                          {(parseFloat(pos.unrealized_pnl) || 0).toFixed(2)}
+                          <span className="text-sm ml-1 not-italic opacity-50">vUSDC</span>
+                        </div>
+                      </div>
+
+                      {/* Right: Price Details Grid */}
+                      <div className="p-4 bg-black/20 grid grid-cols-2 gap-x-8 gap-y-2 min-w-[300px] relative">
+                        <div className="flex flex-col">
+                          <span className="text-[8px] font-black text-slate-500 uppercase">Entry Price</span>
+                          <span className="text-xs font-mono text-white">
+                            {pos.entry_price && pos.entry_price !== "0" ? `$${formatPrice(pos.entry_price)}` : '---'}
+                          </span>
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-[8px] font-black text-slate-500 uppercase">Mark Price</span>
+                          <span className="text-xs font-mono text-accent animate-pulse">
+                            {pos.mark_price && pos.mark_price !== "0" ? `$${formatPrice(pos.mark_price)}` : '---'}
+                          </span>
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-[8px] font-black text-slate-500 uppercase text-success">Take Profit</span>
+                          <span className="text-[10px] font-black text-success italic">
+                            {pos.tp_price && pos.tp_price !== "---" ? `$${formatPrice(pos.tp_price)}` : 'NOT SET'}
+                          </span>
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-[8px] font-black text-slate-500 uppercase text-danger">Stop Loss</span>
+                          <span className="text-[10px] font-black text-danger italic">
+                            {pos.sl_price && pos.sl_price !== "---" ? `$${formatPrice(pos.sl_price)}` : 'NOT SET'}
+                          </span>
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-[8px] font-black text-slate-500 uppercase">Initial Margin</span>
+                          <span className="text-[10px] font-bold text-accent">
+                            {pos.margin && pos.margin !== "0" ? `$${formatPrice(pos.margin)}` : '---'}
+                          </span>
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-[8px] font-black text-slate-500 uppercase">Last Update</span>
+                          <span className="text-[10px] font-bold text-slate-400">{new Date().toLocaleTimeString()}</span>
+                        </div>
+
+                        {/* MANUAL CLOSE BUTTON */}
+                        <div className="col-span-2 mt-2 pt-2 border-t border-slate-800">
+                          <button
+                            disabled={isClosing}
+                            onClick={async () => {
+                              if (confirm(`Are you sure you want to CLOSE ${pos.symbol} position?`)) {
+                                setIsClosing(true);
+                                try {
+                                  const res = await fetch(`${getBaseUrl()}/api/trade/close`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                      address: address,
+                                      symbol: pos.symbol,
+                                      side: pos.side,
+                                      quantity: pos.size
+                                    })
+                                  });
+                                  const data = await res.json();
+                                  if (data.status === 'success') {
+                                    alert("Position closed successfully!");
+                                    fetchStats(); // Refresh the data
+                                  } else {
+                                    alert("Failed to close: " + JSON.stringify(data));
+                                  }
+                                } catch (e) {
+                                  alert("Error: " + e);
+                                } finally {
+                                  setIsClosing(false);
+                                }
+                              }
+                            }}
+                            className={`w-full py-2 font-black text-[10px] uppercase tracking-[0.2em] transition-all border-2 ${
+                              isClosing 
+                              ? 'bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed' 
+                              : 'bg-danger/10 border-danger text-danger hover:bg-danger hover:text-white shadow-[4px_4px_0px_0px_rgba(239,68,68,1)] active:translate-x-1 active:translate-y-1 active:shadow-none'
+                            }`}
+                          >
+                            {isClosing ? 'EXECUTING CLOSE...' : '⚠ FORCE CLOSE POSITION'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+          </>
         ) : (
           <div className="neobrutal-card p-2 bg-slate-900/50 border-slate-800 flex items-center justify-between px-4">
             <div className="flex items-center gap-2">

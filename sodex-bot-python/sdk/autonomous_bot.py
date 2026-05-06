@@ -102,7 +102,7 @@ class AutonomousBot:
             }
             
             # 3. Check Position State
-            state_resp = user_client.get_perps_state(master_addr)
+            state_resp = await asyncio.to_thread(user_client.get_perps_state, master_addr)
             active_pos = None
             if state_resp and state_resp.get("code") == 0 and state_resp.get("data"):
                 positions = state_resp["data"].get("P") or []
@@ -118,7 +118,7 @@ class AutonomousBot:
             step_size = 0.0001 # Corrected default for BTC-USD
             try:
                 sym_url = f"{user_client.base_url}/markets/symbols"
-                resp = requests.get(sym_url, timeout=5)
+                resp = await asyncio.to_thread(requests.get, sym_url, timeout=5)
                 if resp.status_code == 200:
                     meta_data = resp.json().get("data", [])
                     for meta in meta_data:
@@ -130,28 +130,29 @@ class AutonomousBot:
             except: pass
 
             # 5. SCANNING & ANALYSIS (Always run even if pos exists)
-            p_str = user_client.get_mark_price(SYMBOL)
+            p_str = await asyncio.to_thread(user_client.get_mark_price, SYMBOL)
             if not p_str: return
             p_float = float(p_str)
 
-            klines = user_client.get_klines(SYMBOL, interval="15m", limit=50)
+            klines = await asyncio.to_thread(user_client.get_klines, SYMBOL, interval="15m", limit=50)
             news_sym = SYMBOL.split("-")[0]
-            news = self.news_agg.fetch_latest_news(news_sym, limit=20)
+            news = await asyncio.to_thread(self.news_agg.fetch_latest_news, news_sym, limit=20)
             news_text = "\n".join([f"- {n['title']}" for n in news]) if news else ""
-            intel_data = self.market_intel.get_comprehensive_intel(news_sym)
+            intel_data = await asyncio.to_thread(self.market_intel.get_comprehensive_intel, news_sym)
 
             # Fetch Balance
             balance_val = "100"
             try:
-                bal_data = user_client.get_perps_balance(master_addr)
+                bal_data = await asyncio.to_thread(user_client.get_perps_balance, master_addr)
                 balance_val = str(bal_data)
             except: pass
 
             risk_profile = conf.get("risk_profile", "SAFETY").upper()
             mode = conf.get('trading_mode', 'MOMENTUM')
             
-            # AI Analysis
-            result = self.strategy.analyze(
+            # 4. AI Analysis - Use to_thread if it performs blocking network calls
+            result = await asyncio.to_thread(
+                self.strategy.analyze,
                 SYMBOL, p_str, klines, news_text, intel_data,
                 mode=mode, risk_profile=risk_profile, custom_keys=custom_keys
             )
@@ -181,7 +182,7 @@ class AutonomousBot:
                 is_reversal = (cur_side == 1 and decision == "SHORT") or (cur_side == 2 and decision == "LONG")
                 if is_reversal and ai_score >= 0.75:
                     print(f"⚠️ REVERSAL DETECTED! Closing {SYMBOL} and switching sides.")
-                    user_client.close_position(account_id, symbol_id, cur_side, cur_size)
+                    await asyncio.to_thread(user_client.close_position, account_id, symbol_id, cur_side, cur_size)
                     self.db.add_log(f"Reversal! Closed {SYMBOL} to switch to {decision}", "auto")
                     active_pos = None # Allow to open new position below
                 
@@ -193,7 +194,8 @@ class AutonomousBot:
                     clean_sl = round_step(new_sl, tick_size)
                     
                     # EXECUTE: Update TP/SL on exchange
-                    user_client.update_position_tpsl(
+                    await asyncio.to_thread(
+                        user_client.update_position_tpsl,
                         account_id, symbol_id, cur_side, cur_size,
                         tp_price=None, # Keep old TP or None
                         sl_price=clean_sl
@@ -263,13 +265,14 @@ class AutonomousBot:
             if not active_pos:
                 try:
                     print(f">>> AUTONOMOUS: Syncing leverage to x{risk_leverage} for {SYMBOL}")
-                    user_client.update_leverage(account_id, symbol_id, risk_leverage)
-                    time.sleep(0.5) 
+                    await asyncio.to_thread(user_client.update_leverage, account_id, symbol_id, risk_leverage)
+                    await asyncio.sleep(0.5) 
                 except Exception as le:
                     print(f"Leverage Sync Warning: {le}")
 
             # STEP B: Place Order with TP/SL
-            user_client.place_order_with_tpsl(
+            await asyncio.to_thread(
+                user_client.place_order_with_tpsl,
                 account_id, symbol_id, side, 2, clean_qty, clean_price, 
                 clean_tp, clean_sl, leverage=risk_leverage
             )

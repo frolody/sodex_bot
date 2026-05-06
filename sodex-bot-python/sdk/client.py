@@ -346,6 +346,35 @@ class SodexClient:
 
         return self._post_trade("newOrder", params, nonce=t)
 
+    def close_position(self, account_id: int, symbol_id: int, side: int, quantity: float) -> dict:
+        """
+        Closes a position by placing an opposite market order with reduceOnly=True.
+        Side: 1 (LONG) -> SELL (2), 2 (SHORT) -> BUY (1)
+        """
+        t = int(time.time() * 1000)
+        opp_side = 2 if int(side) == 1 else 1
+        
+        print(f">>>> SODEX: Manual Closing Position (SymbolID: {symbol_id}, Qty: {quantity})")
+        
+        params = OrderedDict([
+            ("accountID", int(account_id)),
+            ("symbolID",  int(symbol_id)),
+            ("orders", [
+                OrderedDict([
+                    ("clOrdID",      f"{t}-close"),
+                    ("modifier",     1), # Normal
+                    ("side",         opp_side),
+                    ("type",         2), # MARKET
+                    ("timeInForce",  3), # IOC
+                    ("quantity",     str(quantity)),
+                    ("reduceOnly",   True),
+                    ("positionSide", 1)
+                ])
+            ])
+        ])
+        
+        return self._post_trade("newOrder", params, nonce=t)
+
     def get_perps_balance(self, address: str) -> float:
         try:
             # Use /state endpoint for more accurate margin awareness

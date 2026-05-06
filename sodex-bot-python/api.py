@@ -17,6 +17,8 @@ from contextlib import asynccontextmanager
 
 from config import Config
 from sdk.auth import SodexAuth
+from sdk.client import SodexClient
+from sdk.database import DatabaseManager
 
 # Globals (Initialized inside lifespan or lazily)
 db = None
@@ -33,9 +35,7 @@ async def lifespan(app: FastAPI):
     print("="*50)
     
     try:
-        # ... existing imports ...
-        from sdk.database import DatabaseManager
-        from sdk.client import SodexClient
+        # Initializing Managers
         from agents.news_aggregator import NewsAggregator
         from agents.strategy_engine import StrategyEngine
         from sdk.autonomous_bot import AutonomousBot
@@ -107,7 +107,7 @@ async def retry_async(func, *args, retries=3, delay=2, **kwargs):
         try:
             if asyncio.iscoroutinefunction(func):
                 return await func(*args, **kwargs)
-            return func(*args, **kwargs)
+            return await asyncio.to_thread(func, *args, **kwargs)
         except Exception as e:
             if attempt == retries - 1: raise e
             await asyncio.sleep(delay)
@@ -396,7 +396,7 @@ async def trade_unified(req: UnifiedTradeRequest):
         try:
             # Official Sodex Endpoint for Symbol Metadata
             sym_url = f"{client.base_url}/markets/symbols?symbol={req.symbol}"
-            resp = requests.get(sym_url, timeout=5)
+            resp = await asyncio.to_thread(requests.get, sym_url, timeout=5)
             if resp.status_code == 200:
                 sym_data = resp.json().get("data", [])
                 if sym_data:
@@ -596,6 +596,58 @@ async def trade_unified(req: UnifiedTradeRequest):
 
     except Exception as e:
         return {"code": -1, "error": str(e)}
+
+class CloseRequest(BaseModel):
+    address: str
+    symbol: str
+    side: str
+    quantity: float
+
+@app.post("/api/trade/close")
+async def close_position(req: CloseRequest):
+    """
+    Manually close an active position.
+    """
+    try:
+        user_conf = db.get_config(req.address)
+        if not user_conf:
+            raise HTTPException(status_code=404, detail="User not found")
+            
+        private_key = user_conf.get("private_key")
+        account_id = user_conf.get("account_id")
+        
+        if not private_key or not account_id:
+            raise HTTPException(status_code=400, detail="User credentials missing")
+            
+        # Create client for this user
+        user_client = SodexClient(private_key=private_key)
+        
+        # Resolve Symbol ID
+        sym_info = user_client.get_symbol_info(req.symbol)
+        symbol_id = sym_info["id"]
+        
+        # Map side string to integer
+        # 1 = LONG, 2 = SHORT
+        side_int = 1 if req.side.upper() == "LONG" else 2
+        
+        print(f"DEBUG: Manual Close Request for {req.address} | {req.symbol} (ID: {symbol_id}) | Side: {req.side} ({side_int}) | Qty: {req.quantity}")
+        
+        # Use the newly added close_position method in SDK
+        resp = await retry_async(
+            user_client.close_position,
+            account_id=int(account_id),
+            symbol_id=symbol_id,
+            side=side_int,
+            quantity=float(req.quantity)
+        )
+        db.add_log(f"Manual Close: {req.symbol} Qty:{req.quantity}", "manual")
+        return {"status": "success", "response": resp}
+        
+    except Exception as e:
+        print(f"CLOSE ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/check-account")
 async def check_account(address: str = Query(...)):
