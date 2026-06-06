@@ -86,9 +86,11 @@ class AutonomousBot:
             network_mode = conf.get("network_mode", "testnet")
             
             if network_mode == "mainnet":
+                private_key = conf.get("sodex_private_key")
+                if not private_key: return
+                master_addr = conf.get("wallet_address").lower()
                 account_id = conf.get("account_id_mainnet")
                 api_key_name = conf.get("sodex_api_key")
-                master_addr = conf.get("wallet_address").lower()
             else:
                 account_id = conf.get("account_id", Config.SODEX_ACCOUNT_ID)
                 api_key_name = master_addr

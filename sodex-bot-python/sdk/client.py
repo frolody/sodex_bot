@@ -361,17 +361,17 @@ class SodexClient:
         
         orders = []
         # 1. Main Entry Order (Parent - Modifier 3)
-        main_order = OrderedDict([
-            ("clOrdID",      f"{t}-main"),
-            ("modifier",     3), # Bracket Parent
-            ("side",         int(side)),
-            ("type",         int(order_type)),
-            ("timeInForce",  int(3 if is_market else 1)),
-            ("quantity",     str(quantity)),
-            ("reduceOnly",   False),
-            ("positionSide", 1)
-        ])
-        if not is_market: main_order["price"] = str(price)
+        main_order = OrderedDict()
+        main_order["clOrdID"] = f"{t}-main"
+        main_order["modifier"] = 3 # Bracket Parent
+        main_order["side"] = int(side)
+        main_order["type"] = int(order_type)
+        main_order["timeInForce"] = int(3 if is_market else 1)
+        if not is_market: 
+            main_order["price"] = str(price)
+        main_order["quantity"] = str(quantity)
+        main_order["reduceOnly"] = False
+        main_order["positionSide"] = 1
         orders.append(main_order)
 
         opp_side = 2 if int(side) == 1 else 1
