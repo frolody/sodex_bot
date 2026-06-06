@@ -91,7 +91,12 @@ class DatabaseManager:
                 gemini_api_key TEXT,
                 openrouter_api_key TEXT,
                 trading_mode TEXT DEFAULT 'MOMENTUM',
-                last_auto_log TEXT
+                last_auto_log TEXT,
+                sodex_api_key TEXT,
+                sodex_private_key TEXT,
+                account_id_mainnet INTEGER,
+                network_mode TEXT DEFAULT 'testnet',
+                volume_farming INTEGER DEFAULT 0
             )
         ''')
         
@@ -109,6 +114,16 @@ class DatabaseManager:
             cursor.execute("ALTER TABLE bot_config ADD COLUMN openrouter_api_key TEXT")
         if 'trading_mode' not in columns:
             cursor.execute("ALTER TABLE bot_config ADD COLUMN trading_mode TEXT DEFAULT 'MOMENTUM'")
+        if 'sodex_api_key' not in columns:
+            cursor.execute("ALTER TABLE bot_config ADD COLUMN sodex_api_key TEXT")
+        if 'sodex_private_key' not in columns:
+            cursor.execute("ALTER TABLE bot_config ADD COLUMN sodex_private_key TEXT")
+        if 'account_id_mainnet' not in columns:
+            cursor.execute("ALTER TABLE bot_config ADD COLUMN account_id_mainnet INTEGER")
+        if 'network_mode' not in columns:
+            cursor.execute("ALTER TABLE bot_config ADD COLUMN network_mode TEXT DEFAULT 'testnet'")
+        if 'volume_farming' not in columns:
+            cursor.execute("ALTER TABLE bot_config ADD COLUMN volume_farming INTEGER DEFAULT 0")
             
         conn.commit()
 
@@ -160,14 +175,14 @@ class DatabaseManager:
         conn.commit()
         conn.close()
 
-    def save_config(self, address, private_key, account_id, symbol, leverage, gemini_key=None, openrouter_key=None, trading_mode='MOMENTUM'):
+    def save_config(self, address, private_key, account_id, symbol, leverage, gemini_key=None, openrouter_key=None, trading_mode='MOMENTUM', sodex_api_key=None, sodex_private_key=None, account_id_mainnet=None, network_mode='testnet', volume_farming=0):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         address = address.lower()
         
         cursor.execute('''
-            INSERT INTO bot_config (wallet_address, private_key, account_id, symbol, leverage, gemini_api_key, openrouter_api_key, trading_mode)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO bot_config (wallet_address, private_key, account_id, symbol, leverage, gemini_api_key, openrouter_api_key, trading_mode, sodex_api_key, sodex_private_key, account_id_mainnet, network_mode, volume_farming)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(wallet_address) DO UPDATE SET
                 private_key=excluded.private_key,
                 account_id=excluded.account_id,
@@ -175,8 +190,13 @@ class DatabaseManager:
                 leverage=excluded.leverage,
                 gemini_api_key=COALESCE(excluded.gemini_api_key, bot_config.gemini_api_key),
                 openrouter_api_key=COALESCE(excluded.openrouter_api_key, bot_config.openrouter_api_key),
-                trading_mode=COALESCE(excluded.trading_mode, bot_config.trading_mode)
-        ''', (address, private_key, account_id, symbol, leverage, gemini_key, openrouter_key, trading_mode))
+                trading_mode=COALESCE(excluded.trading_mode, bot_config.trading_mode),
+                sodex_api_key=COALESCE(excluded.sodex_api_key, bot_config.sodex_api_key),
+                sodex_private_key=COALESCE(excluded.sodex_private_key, bot_config.sodex_private_key),
+                account_id_mainnet=COALESCE(excluded.account_id_mainnet, bot_config.account_id_mainnet),
+                network_mode=COALESCE(excluded.network_mode, bot_config.network_mode),
+                volume_farming=COALESCE(excluded.volume_farming, bot_config.volume_farming)
+        ''', (address, private_key, account_id, symbol, leverage, gemini_key, openrouter_key, trading_mode, sodex_api_key, sodex_private_key, account_id_mainnet, network_mode, volume_farming))
         
         conn.commit()
         conn.close()

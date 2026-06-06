@@ -79,18 +79,32 @@ class AutonomousBot:
         """
         try:
             SYMBOL = conf.get("symbol", Config.TARGET_SYMBOL)
-            account_id = conf.get("account_id", Config.SODEX_ACCOUNT_ID)
             private_key = conf.get("private_key")
             if not private_key: return
             
             master_addr = SodexAuth.recover_address(private_key)
-            print(f">>> AUTONOMOUS: Starting analysis for {master_addr[:6]} ({SYMBOL})")
+            network_mode = conf.get("network_mode", "testnet")
+            
+            if network_mode == "mainnet":
+                account_id = conf.get("account_id_mainnet")
+                api_key_name = conf.get("sodex_api_key")
+                master_addr = conf.get("wallet_address").lower()
+            else:
+                account_id = conf.get("account_id", Config.SODEX_ACCOUNT_ID)
+                api_key_name = master_addr
+
+            if not account_id:
+                print(f"Skipping {master_addr[:6]}: No Account ID set for {network_mode}.")
+                return
+                
+            print(f">>> AUTONOMOUS: Starting analysis for {master_addr[:6]} ({SYMBOL}) on {network_mode.upper()}")
             
             # CRITICAL: Create a NEW isolated client for this user to avoid parallel conflicts
             user_client = SodexClient(
                 is_spot=False, 
                 private_key=private_key,
-                api_key_name=master_addr # On testnet, API name is usually the address
+                api_key_name=api_key_name,
+                network_mode=network_mode
             )
             
             # Use User-Specific API Keys if available for AI
@@ -194,14 +208,16 @@ class AutonomousBot:
                     clean_sl = round_step(new_sl, tick_size)
                     
                     # EXECUTE: Update TP/SL on exchange
-                    await asyncio.to_thread(
+                    res = await asyncio.to_thread(
                         user_client.update_position_tpsl,
-                        account_id, symbol_id, cur_side, cur_size,
-                        tp_price=None, # Keep old TP or None
+                        account_id, SYMBOL, cur_side, cur_size,
+                        tp_price=None,
                         sl_price=clean_sl
                     )
                     
-                    self.db.save_auto_log(master_addr, f"{SYMBOL}: Sentiment weak. Tightening SL to {clean_sl}")
+                    status = "Success" if res.get("code") == 0 else f"Failed: {res.get('msg') or res.get('error')}"
+                    print(f">>> SODEX: SL Update {status}")
+                    self.db.save_auto_log(master_addr, f"{SYMBOL}: Sentiment weak. SL update {status}")
                     return
 
                 # FEATURE 3: PYRAMIDING (Scale-In)
@@ -232,7 +248,41 @@ class AutonomousBot:
                     return
 
             # 7. NEW POSITION EXECUTION (Only if active_pos is None)
+            if decision == "HOLD" and int(conf.get("volume_farming") or 0) == 1:
+                print(f"[VOLUME FARMING] ACTIVE [{master_addr[:6]}]: AI is HOLD, executing Maker Limits.")
+                risk_leverage = Config.DEFAULT_LEVERAGE
+                
+                # Check Funding Rate or just default to LONG. We'll default to LONG for simplicity.
+                side = 1 
+                
+                # Very tight TP (just to pay fees) and wider SL to avoid sudden liquidation
+                tp_price = str(p_float + (tick_size * 2)) if side == 1 else str(p_float - (tick_size * 2))
+                sl_price = str(p_float * 0.995) if side == 1 else str(p_float * 1.005)
+                
+                # Passive Entry Price (Try to be Maker by placing at Bid/Ask)
+                entry_price = str(p_float - tick_size) if side == 1 else str(p_float + tick_size)
+                
+                clean_price = round_step(entry_price, tick_size)
+                clean_tp = round_step(tp_price, tick_size)
+                clean_sl = round_step(sl_price, tick_size)
+                
+                bal = float(balance_val)
+                qty = (bal * 0.5 * risk_leverage) / p_float # use 50% margin
+                clean_qty = round_step(qty, step_size)
+                
+                if float(clean_qty) > 0:
+                    self.db.add_log(f"Volume Farm [{master_addr[:6]}]: Post-Only {clean_qty} at {clean_price}", "auto")
+                    self.db.save_auto_log(master_addr, f"{SYMBOL}: Neutral trend. Farming volume with {clean_qty} at {clean_price}.")
+                    
+                    order_res = await asyncio.to_thread(
+                        user_client.place_order_with_tpsl,
+                        account_id, symbol_id, side, 1, clean_qty, clean_price, 
+                        clean_tp, clean_sl, leverage=risk_leverage
+                    )
+                return
+
             if decision not in ["LONG", "SHORT"]:
+                self.db.save_auto_log(master_addr, f"{SYMBOL}: Market Neutral. Waiting for momentum.")
                 return
 
             params = result.get("params", {})
@@ -271,11 +321,17 @@ class AutonomousBot:
                     print(f"Leverage Sync Warning: {le}")
 
             # STEP B: Place Order with TP/SL
-            await asyncio.to_thread(
+            print(f">>> SODEX: Executing {decision} {SYMBOL} Qty:{clean_qty} at {clean_price}...")
+            order_res = await asyncio.to_thread(
                 user_client.place_order_with_tpsl,
                 account_id, symbol_id, side, 2, clean_qty, clean_price, 
                 clean_tp, clean_sl, leverage=risk_leverage
             )
+            
+            if order_res.get("code") == 0:
+                print(f"✅ SODEX SUCCESS: {decision} position opened.")
+            else:
+                print(f"❌ SODEX FAILED: {order_res.get('msg') or order_res.get('error')}")
 
         except Exception as e:
             print(f"Error processing user {conf.get('wallet_address')}: {e}")

@@ -1,61 +1,177 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap');
 @import "tailwindcss";
 
-
-:root {
-  --background: #020617;
-  --foreground: #f8fafc;
-  --card: rgba(30, 41, 59, 0.5);
-  --card-border: rgba(51, 65, 85, 0.5);
-  --accent: #f97316;
-  --success: #22c55e;
-  --danger: #ef4444;
+/* =============================================
+   TAILWIND v4 DESIGN TOKENS
+   Menggunakan hex secara langsung agar opacity
+   modifier (/20, /50, dll) berfungsi penuh.
+============================================= */
+@theme {
+  --color-background: #000000;
+  --color-foreground: #f8fafc;
+  --color-accent: #f97316;
+  --color-success: #22c55e;
+  --color-danger: #ef4444;
+  --color-warning: #eab308;
+  --color-info: #3b82f6;
+  --color-slate-50: #f8fafc;
+  --color-slate-300: #cbd5e1;
+  --color-slate-500: #64748b;
+  --color-slate-600: #475569;
+  --color-slate-700: #404040;
+  --color-slate-800: #262626;
+  --color-slate-900: #171717;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-accent: var(--accent);
-  --color-success: var(--success);
-  --color-danger: var(--danger);
+/* --- Risk Profile Explicit States --- */
+.risk-btn-safety-active {
+  border-color: #22c55e !important;
+  color: #fff !important;
+  box-shadow: 0 0 15px rgba(34, 197, 94, 0.4);
+}
+
+.risk-btn-moderate-active {
+  border-color: #3b82f6 !important;
+  color: #fff !important;
+  box-shadow: 0 0 15px rgba(59, 130, 246, 0.4);
+}
+
+.risk-btn-aggressive-active {
+  border-color: #ef4444 !important;
+  color: #fff !important;
+  box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);
+}
+
+.risk-btn-inactive {
+  border-color: #262626 !important;
+  color: #64748b !important;
+}
+
+.risk-btn-inactive:hover {
+  border-color: #475569 !important;
+  color: #cbd5e1 !important;
+}
+
+/* =============================================
+   BASE STYLES
+============================================= */
+* {
+  box-sizing: border-box;
 }
 
 body {
   font-family: 'Outfit', sans-serif;
-  background: var(--background);
-  color: var(--foreground);
+  background-color: #000000;
+  color: #f8fafc;
   background-image: 
-    radial-gradient(circle at 0% 0%, rgba(249, 115, 22, 0.05) 0%, transparent 50%),
-    radial-gradient(circle at 100% 100%, rgba(59, 130, 246, 0.05) 0%, transparent 50%);
+    radial-gradient(circle at 0% 0%, rgba(249, 115, 22, 0.05) 0%, transparent 50%);
   min-height: 100vh;
 }
 
-@layer components {
-  .neobrutal-card {
-    background: #1e1e1e;
-    border: 3px solid #000;
-    box-shadow: 8px 8px 0px #000;
-    transition: all 0.2s ease;
-  }
+/* ============================================
+   NEOBRUTALISM COMPONENTS
+   Class custom ditempatkan di luar @layer 
+   agar tidak terkena tree-shaking Tailwind v4.
+============================================= */
 
-  .neobrutal-button {
-    background: var(--accent);
-    color: #000;
-    border: 3px solid #000;
-    box-shadow: 4px 4px 0px #000;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    transition: all 0.1s ease;
-  }
+/* --- Card --- */
+.neobrutal-card {
+  background: #171717;
+  border: 3px solid #000;
+  box-shadow: 8px 8px 0px #000;
+  transition: all 0.2s ease;
+}
 
-  .neobrutal-button:hover {
-    transform: translate(-2px, -2px);
-    box-shadow: 6px 6px 0px #000;
-  }
+/* --- Button --- */
+.neobrutal-button {
+  background-color: #f97316; /* Warna solid, BUKAN gradient */
+  color: #000;
+  border: 3px solid #000; /* Border hitam tebal khas neobrutalism */
+  box-shadow: 4px 4px 0px #000; /* Shadow solid/tajam khas neobrutalism */
+  font-weight: 800;
+  font-family: 'Outfit', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  transition: all 0.1s ease;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 
-  .neobrutal-button:active {
-    transform: translate(2px, 2px);
-    box-shadow: 0px 0px 0px #000;
-  }
+.neobrutal-button:hover:not(:disabled) {
+  transform: translate(-2px, -2px);
+  box-shadow: 6px 6px 0px #000; /* Jarak shadow bertambah saat hover */
+}
+
+.neobrutal-button:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 0px 0px 0px #000; /* Shadow hilang (nempel) saat ditekan */
+}
+
+.neobrutal-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(100%);
+}
+
+/* --- Custom Scrollbar --- */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(249, 115, 22, 0.4);
+  border-radius: 2px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(249, 115, 22, 0.7);
+}
+
+/* --- Global Utility Overrides --- */
+.text-success { color: #22c55e !important; }
+.text-danger { color: #ef4444 !important; }
+.text-warning { color: #eab308 !important; }
+.text-info { color: #3b82f6 !important; }
+.text-accent { color: #f97316 !important; }
+
+.bg-success { background-color: #22c55e !important; }
+.bg-danger { background-color: #ef4444 !important; }
+.bg-warning { background-color: #eab308 !important; }
+.bg-info { background-color: #3b82f6 !important; }
+.bg-accent { background-color: #f97316 !important; }
+
+.border-success { border-color: #22c55e !important; }
+.border-danger { border-color: #ef4444 !important; }
+.border-warning { border-color: #eab308 !important; }
+.border-info { border-color: #3b82f6 !important; }
+.border-accent { border-color: #f97316 !important; }
+.border-slate-800 { border-color: #262626 !important; }
+.border-slate-700 { border-color: #404040 !important; }
+
+.bg-slate-900 { background-color: #171717 !important; }
+.bg-slate-800 { background-color: #262626 !important; }
+
+
+.toggle-bg-active { background-color: rgba(249, 115, 22, 0.4) !important; }
+.toggle-bg-inactive { background-color: #262626 !important; }
+
+/* --- Arbitrary Utility Fixes (Tailwind v4) --- */
+.text-\[10px\] { font-size: 10px !important; }
+.text-\[9px\] { font-size: 9px !important; }
+.text-\[8px\] { font-size: 8px !important; }
+.text-\[11px\] { font-size: 11px !important; }
+
+
+/* Glowing outline focus for interactive elements */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid #f97316;
+  outline-offset: 2px;
 }

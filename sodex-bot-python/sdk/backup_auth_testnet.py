@@ -6,7 +6,7 @@ from web3 import Web3
 
 class SodexAuth:
     @staticmethod
-    def create_signature(private_key: str, method: str, params: dict, api_name: str, api_nonce: int, chain_id: int, api_public_key: str = None, network_mode: str = "testnet") -> str:
+    def create_signature(private_key: str, method: str, params: dict, api_name: str, api_nonce: int, chain_id: int, api_public_key: str = None) -> str:
         from collections import OrderedDict
         # 1. PAYLOAD HASH FROM BYTES
         payload = OrderedDict([

@@ -6,14 +6,9 @@ load_dotenv()
 class Config:
     # Intelligence Layer
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-    MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY")
-    MINIMAX_BASE_URL = os.getenv("MINIMAX_BASE_URL", "https://api.minimax.io/anthropic")
-    NVIDIA_MINIMAX_API_KEY = os.getenv("NVIDIA_MINIMAX_API_KEY")
-    NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
     OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
     
     # Data Sources
-    CRYPTO_PANIC_API_KEY = os.getenv("CRYPTO_PANIC_API_KEY")
     SOSOVALUE_API_KEY = os.getenv("SOSOVALUE_API_KEY")
     
     # Environment

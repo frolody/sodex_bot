@@ -9,28 +9,18 @@ class SodexClient:
     def __init__(self, is_spot=True, api_key_name=None, private_key=None, network_mode=None):
         self.is_spot = is_spot
         self.private_key = private_key or Config.SODEX_PRIVATE_KEY
-        
-        # Use provided network_mode, fallback to Config
-        self.network_mode = network_mode
-        if not self.network_mode:
-            self.network_mode = "testnet" if Config.SODEX_TESTNET else "mainnet"
-            
-        is_testnet = (self.network_mode == "testnet")
-        # Set correct chain ID based on network mode (Mainnet: 286623, Testnet: 138565)
-        self.chain_id = 286623 if not is_testnet else 138565
+        self.chain_id = Config.SODEX_CHAIN_ID
         self.api_key_name = api_key_name or Config.SODEX_API_NAME
         
         if not self.api_key_name and self.private_key:
-            if is_testnet:
-                self.api_key_name = SodexAuth.recover_address(self.private_key)
-            else:
-                self.api_key_name = Config.SODEX_API_KEY
+            self.api_key_name = SodexAuth.recover_address(self.private_key)
         
-        if is_testnet:
-            self.api_public_key = Config.SODEX_API_KEY
-        else:
-            # For mainnet, always use the public API key (address), ignore label
-            self.api_public_key = Config.SODEX_API_KEY
+        self.api_public_key = Config.SODEX_API_KEY
+        
+        # Use provided network_mode, fallback to Config
+        is_testnet = Config.SODEX_TESTNET
+        if network_mode:
+            is_testnet = (network_mode == "testnet")
             
         domain = "testnet-gw" if is_testnet else "mainnet-gw"
         self.base_url = f"https://{domain}.sodex.dev/api/v1/perps"
@@ -46,8 +36,7 @@ class SodexClient:
             api_name=self.api_key_name,
             api_nonce=nonce,
             chain_id=self.chain_id,
-            api_public_key=self.api_public_key,
-            network_mode=self.network_mode
+            api_public_key=self.api_public_key
         )
 
         headers = {
@@ -57,19 +46,16 @@ class SodexClient:
             "X-API-Nonce":   str(nonce),
         }
         
-        # Prioritize the specific API key (api_key_name) over global
-        if self.api_key_name:
+        if self.api_key_name and not Config.SODEX_TESTNET:
             headers["X-API-Key"] = str(self.api_key_name)
-        elif self.api_public_key:
-            headers["X-API-Key"] = str(self.api_public_key)
 
         url = f"{self.base_url}/{path}"
         json_body = json.dumps(params, separators=(',', ':'))
         
         try:
-            print(f"DEBUG _POST_TRADE [{http_method}] URL: {url}")
+            print(f"DEBUG _POST_TRADE [{method}] URL: {url}")
             print(f"DEBUG _POST_TRADE PAYLOAD: {json.dumps(params)}")
-            print(f"DEBUG _POST_TRADE HEADERS: X-API-Key={headers.get('X-API-Key')} | Nonce={nonce}")
+            print(f"DEBUG _POST_TRADE HEADERS: X-API-Key={self.api_key_name} | Nonce={nonce}")
             if http_method.upper() == "DELETE":
                 resp = requests.delete(url, data=json_body, headers=headers, timeout=10)
             else:
@@ -422,14 +408,14 @@ class SodexClient:
         Side: 1 (LONG) -> SELL (2), 2 (SHORT) -> BUY (1)
         Also cancels all open orders for the symbol.
         """
+        t = int(time.time() * 1000)
+        opp_side = 2 if int(side) == 1 else 1
+        
         # 1. Cancel all orders first
         sym_info = self.get_symbol_info_by_id(symbol_id)
         if sym_info:
             self.cancel_all_orders_for_symbol(account_id, sym_info["name"])
             time.sleep(0.5)
-
-        t = int(time.time() * 1000)
-        opp_side = 2 if int(side) == 1 else 1
 
         print(f">>>> SODEX: Manual Closing Position (SymbolID: {symbol_id}, Qty: {quantity})")
         
@@ -510,10 +496,9 @@ class SodexClient:
             resp = requests.get(f"{self.base_url}/markets/symbols", timeout=5).json()
             symbols = resp.get("data", [])
             for s in symbols:
-                current_id = s.get("symbolID") or s.get("id") or -1
-                if int(current_id) == int(symbol_id):
+                if int(s.get("id", -1)) == int(symbol_id):
                     return {
-                        "id": int(current_id),
+                        "id": int(s.get("id", 1)),
                         "name": s.get("name"),
                         "tickSize": float(s.get("tickSize", 1.0)),
                         "stepSize": float(s.get("stepSize", 0.00001))
@@ -613,17 +598,11 @@ class SodexClient:
     def execute_order(self, payload: dict, signature: str, nonce: int = None):
         n = nonce or int(time.time() * 1000)
         h = {"Content-Type": "application/json", "Accept": "application/json", "X-API-Sign": signature, "X-API-Nonce": str(n)}
-        if self.api_key_name:
-            h["X-API-Key"] = str(self.api_key_name)
-        elif self.api_public_key:
-            h["X-API-Key"] = str(self.api_public_key)
+        if self.api_key_name and not Config.SODEX_TESTNET: h["X-API-Key"] = str(self.api_key_name)
         return requests.post(f"{self.base_url}/trade/orders", data=json.dumps(payload.get("params", payload), separators=(',', ':')), headers=h, timeout=10).json()
 
     def execute_leverage(self, payload: dict, signature: str, nonce: int = None):
         n = nonce or int(time.time() * 1000)
         h = {"Content-Type": "application/json", "Accept": "application/json", "X-API-Sign": signature, "X-API-Nonce": str(n)}
-        if self.api_key_name:
-            h["X-API-Key"] = str(self.api_key_name)
-        elif self.api_public_key:
-            h["X-API-Key"] = str(self.api_public_key)
+        if not Config.SODEX_TESTNET: h["X-API-Key"] = str(self.api_key_name)
         return requests.post(f"{self.base_url}/trade/leverage", data=json.dumps(payload.get("params", payload), separators=(',', ':')), headers=h, timeout=10).json()

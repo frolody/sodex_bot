@@ -17,20 +17,20 @@ from contextlib import asynccontextmanager
 
 from config import Config
 from sdk.auth import SodexAuth
-from sdk.client import SodexClient
+from sdk.client_mainnet import SodexClient
 from sdk.database import DatabaseManager
 
 # Globals (Initialized inside lifespan or lazily)
 db = None
-client_testnet = None
-client_mainnet = None
+client = None
 news_agg = None
+strategy = None
 auto_bot = None
 market_intel = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global db, client_testnet, client_mainnet, news_agg, auto_bot, market_intel
+    global db, client, news_agg, strategy, auto_bot, market_intel
     print("\n" + "="*50)
     print("SODEX AI BACKEND STARTING...")
     print("="*50)
@@ -38,21 +38,24 @@ async def lifespan(app: FastAPI):
     try:
         # Initializing Managers
         from agents.news_aggregator import NewsAggregator
+        from agents.strategy_engine import StrategyEngine
         from sdk.autonomous_bot import AutonomousBot
         from agents.market_intelligence import MarketIntelligence
 
         print("[1/5] Initializing Database...")
         db = DatabaseManager()
         
-        print("[2/5] Initializing SoDEX Clients...")
-        client_testnet = SodexClient(is_spot=False, network_mode="testnet")
-        client_mainnet = SodexClient(is_spot=False, network_mode="mainnet")
+        print("[2/5] Initializing SoDEX Client...")
+        client = SodexClient(is_spot=False)
         
         print("[3/5] Initializing News Aggregator...")
         news_agg = NewsAggregator()
 
         print("[3.5/5] Initializing Market Intelligence...")
         market_intel = MarketIntelligence()
+        
+        print("[4/5] Initializing Strategy Engine...")
+        strategy = StrategyEngine(db=db)
         
         print("[5/5] Initializing Autonomous Bot...")
         auto_bot = AutonomousBot(db)
@@ -62,7 +65,7 @@ async def lifespan(app: FastAPI):
         bot_task = asyncio.create_task(auto_bot.start_loop())
 
         print("="*50)
-        print("BACKEND READY AT http://0.0.0.0:8000")
+        print("BACKEND READY AT http://0.0.0.0:8001")
         print("="*50 + "\n")
         
         yield
@@ -80,17 +83,7 @@ async def lifespan(app: FastAPI):
         print(f"FATAL STARTUP ERROR: {e}")
         raise e
 
-def get_client(network: Optional[str] = None, address: Optional[str] = None) -> SodexClient:
-    mode = "testnet"
-    if network == "mainnet":
-        mode = "mainnet"
-    elif address and address != "undefined" and db:
-        conf = db.get_config(address)
-        if conf:
-            mode = conf.get("network_mode", "testnet")
-    return client_mainnet if mode == "mainnet" else client_testnet
-
-app = FastAPI(title="SoDEX AI Microservice", lifespan=lifespan)
+app = FastAPI(title="SoDEX AI Microservice (Mainnet)", lifespan=lifespan)
 
 @app.get("/api/market-intelligence")
 async def get_market_intel(symbol: str = "BTC"):
@@ -135,18 +128,16 @@ async def analyze_market(
     risk: str = Query("SAFETY", description="Risk profile: SAFETY, MODERATE, AGGRESSIVE"),
     balance: str = Query("100", description="Current account balance in vUSDC"),
     address: Optional[str] = Query(None, description="The user wallet address"),
-    mode: Optional[str] = Query(None, description="The selected trading mode"),
-    network: Optional[str] = Query(None, description="The network: testnet or mainnet")
+    mode: Optional[str] = Query(None, description="The selected trading mode")
 ):
     global market_intel
     risk_profile = risk
     try:
-        target_client = get_client(network, address)
-        price_str = await retry_async(target_client.get_mark_price, symbol)
+        price_str = await retry_async(client.get_mark_price, symbol)
         if not price_str:
             raise HTTPException(status_code=404, detail="Price not found")
 
-        klines = await retry_async(target_client.get_klines, symbol, interval="15m", limit=50)
+        klines = await retry_async(client.get_klines, symbol, interval="15m", limit=50)
         # Normalize symbol for news (e.g., BTC-USD -> BTC)
         news_sym = symbol.split("-")[0]
         news = news_agg.fetch_latest_news(news_sym, limit=20)
@@ -196,15 +187,13 @@ async def analyze_market(
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.get("/api/chart/klines")
-async def get_market_klines(symbol: str, interval: str = "15m", limit: int = 100, network: Optional[str] = Query(None)):
-    target_client = get_client(network)
-    klines = await retry_async(target_client.get_klines, symbol, interval, limit)
+async def get_market_klines(symbol: str, interval: str = "15m", limit: int = 100):
+    klines = await retry_async(client.get_klines, symbol, interval, limit)
     return {"klines": klines}
 
 @app.get("/api/markets")
-async def get_available_markets(network: Optional[str] = Query(None)):
-    target_client = get_client(network)
-    markets = await retry_async(target_client.get_markets)
+async def get_available_markets():
+    markets = await retry_async(client.get_markets)
     return {"markets": markets}
 
 @app.get("/api/settings")
@@ -273,7 +262,7 @@ async def toggle_auto_trading(address: str = Query(...), active: bool = Query(..
     return {"status": "success", "is_active": active}
 
 @app.get("/api/stats")
-async def get_stats(address: str = Query(None), network: Optional[str] = Query(None)):
+async def get_stats(address: str = Query(None)):
     conf = None
     try:
         if not db: return {"stats": {}, "positions": [], "logs": []}
@@ -297,14 +286,13 @@ async def get_stats(address: str = Query(None), network: Optional[str] = Query(N
                 conf = db.get_config(address)
                 
                 # Determine correct account_id based on network mode
-                network_mode = network or (conf.get("network_mode", "testnet") if conf else "testnet")
+                network_mode = conf.get("network_mode", "testnet") if conf else "testnet"
                 if network_mode == "mainnet":
                     acc_id = conf.get("account_id_mainnet") if conf else Config.SODEX_ACCOUNT_ID_MAINNET
                 else:
                     acc_id = conf.get("account_id") if conf else Config.SODEX_ACCOUNT_ID
                 
-                target_client = get_client(network_mode, address)
-                pos_resp = await retry_async(target_client.get_perps_positions, address, acc_id)
+                pos_resp = await retry_async(client.get_perps_positions, address, acc_id)
                 print(f"DEBUG POS_RESP: {pos_resp}")
                 if pos_resp and pos_resp.get("code") == 0:
                     data_body = pos_resp.get("data", {})
@@ -316,7 +304,7 @@ async def get_stats(address: str = Query(None), network: Optional[str] = Query(N
                     
                     if isinstance(raw_positions, list):
                         # Fetch open orders to find TP/SL
-                        orders_resp = await retry_async(target_client.get_perps_orders, address, acc_id)
+                        orders_resp = await retry_async(client.get_perps_orders, address, acc_id)
                         raw_orders = orders_resp.get("data", {}).get("orders", []) if orders_resp else []
                         
                         # Debug: Print raw orders to see structure
@@ -334,7 +322,7 @@ async def get_stats(address: str = Query(None), network: Optional[str] = Query(N
                             
                             # 2. Fetch Real-time Mark Price
                             try:
-                                mark_val = await retry_async(target_client.get_mark_price, sym)
+                                mark_val = await retry_async(client.get_mark_price, sym)
                                 mark = float(mark_val) if mark_val else entry
                             except:
                                 mark = entry
@@ -404,16 +392,26 @@ async def get_stats(address: str = Query(None), network: Optional[str] = Query(N
         return {"stats": {}, "positions": [], "logs": [], "error": str(e)}
 
 @app.post("/api/execute")
-async def execute_trade(req: ExecuteRequest, network: Optional[str] = Query(None)):
-    target_client = get_client(network)
-    result = await retry_async(target_client.execute_order, req.payload, req.signature, req.nonce)
+async def execute_trade(req: ExecuteRequest):
+    result = await retry_async(client.execute_order, req.payload, req.signature, req.nonce)
     return result
 
 @app.post("/api/leverage")
-async def update_leverage(req: ExecuteRequest, network: Optional[str] = Query(None)):
-    target_client = get_client(network)
-    result = await retry_async(target_client.execute_leverage, req.payload, req.signature, req.nonce)
+async def update_leverage(req: ExecuteRequest):
+    result = await retry_async(client.execute_leverage, req.payload, req.signature, req.nonce)
     return result
+
+class SettingsUpdate(BaseModel):
+    address: str
+    private_key: str
+    account_id: int | None = None
+    symbol: str | None = None
+    gemini_api_key: str | None = None
+    openrouter_api_key: str | None = None
+    trading_mode: str | None = "MOMENTUM"
+    sodex_api_key: str | None = None
+    account_id_mainnet: int | None = None
+    network_mode: str | None = "testnet"
 
 class UnifiedTradeRequest(BaseModel):
     address: str
@@ -431,24 +429,7 @@ class UnifiedTradeRequest(BaseModel):
 @app.post("/api/trade-unified")
 async def trade_unified(req: UnifiedTradeRequest):
     try:
-        # Fetch Credentials from DB first to determine network mode
-        conf = db.get_config(req.address) if db else {}
-        signing_key = conf.get("private_key")
-        network_mode = conf.get("network_mode", "testnet")
-        
-        if network_mode == "mainnet":
-            api_key = conf.get("sodex_api_key")
-            signing_key = conf.get("sodex_private_key") or conf.get("private_key")
-        else:
-            signing_key = conf.get("private_key")
-            api_key = SodexAuth.recover_address(signing_key) if signing_key else None
-        
-        if not signing_key:
-            return {"code": -1, "error": "Private Key not found. Check settings."}
-
-        # Step 1: Dynamic Market Metadata Resolution using temp client
-        temp_client = SodexClient(api_key_name=api_key, private_key=signing_key, network_mode=network_mode)
-        
+        # Step 1: Dynamic Market Metadata Resolution
         import requests 
         symbol_id = 1
         tick_size = 0.01 
@@ -456,7 +437,7 @@ async def trade_unified(req: UnifiedTradeRequest):
         
         try:
             # Official Sodex Endpoint for Symbol Metadata
-            sym_url = f"{temp_client.base_url}/markets/symbols?symbol={req.symbol}"
+            sym_url = f"{client.base_url}/markets/symbols?symbol={req.symbol}"
             resp = await asyncio.to_thread(requests.get, sym_url, timeout=5)
             if resp.status_code == 200:
                 sym_data = resp.json().get("data", [])
@@ -505,13 +486,33 @@ async def trade_unified(req: UnifiedTradeRequest):
         # Step 2: Prep Leverage Payload
         from collections import OrderedDict
         
+        # FETCH Credentials from DB
+        conf = db.get_config(req.address) if db else {}
+        signing_key = conf.get("private_key")
+        network_mode = conf.get("network_mode", "testnet")
+        
+        if network_mode == "mainnet":
+            api_key = conf.get("sodex_api_key")
+        else:
+            api_key = SodexAuth.recover_address(signing_key) if signing_key else None
+        
+        if not signing_key or not api_key:
+            return {"code": -1, "error": f"Credentials not found for {network_mode.upper()}. Check settings."}
+
         lev_params = OrderedDict([
             ("accountID",  int(req.account_id)),
             ("symbolID",   int(symbol_id)),
             ("leverage",   int(req.leverage)),
             ("marginMode", int(req.margin_mode))
         ])
+        
+        # ... (rest of the logic uses clean_price and clean_qty) ...
+        # (I need to ensure the following code uses these cleaned variables)
 
+        
+        # Inject API Key into a temporary client for this request
+        temp_client = SodexClient(api_key_name=api_key, private_key=signing_key, network_mode=network_mode)
+        
         # Step 2: Sign & Hit Leverage
         print(f">>> UNIFIED: Step 1 - Syncing Leverage to x{req.leverage}")
         nonce_lev = int(time.time() * 1000)
@@ -521,7 +522,7 @@ async def trade_unified(req: UnifiedTradeRequest):
             params=lev_params,
             api_name=temp_client.api_key_name,
             api_nonce=nonce_lev,
-            chain_id=temp_client.chain_id,
+            chain_id=286623,
             api_public_key=temp_client.api_public_key
         )
         
@@ -543,8 +544,10 @@ async def trade_unified(req: UnifiedTradeRequest):
         from collections import OrderedDict
         # Step 4: Sign & Hit Order
         nonce_ord = int(time.time() * 1000) + 1 # Ensure unique nonce
-        cl_ord_id = f"{nonce_ord}-main"
+        cl_ord_id = f"{req.account_id}-{nonce_ord}"
         
+        # Use the signing_key fetched from DB above
+
         # Build order item based on type
         is_market = int(req.order_type) == 2
         curr_p = float(req.price or 0)
@@ -558,14 +561,14 @@ async def trade_unified(req: UnifiedTradeRequest):
             if (int(req.side) == 1 and tp_val > curr_p) or (int(req.side) == 2 and tp_val < curr_p):
                 final_tp = round_step(tp_val, tick_size)
             else:
-                print(f"WARNING: AI TP ({tp_val}) invalid for side {req.side} @ {curr_p}. Skipped.")
+                print(f"⚠️ WARNING: AI TP ({tp_val}) invalid for side {req.side} @ {curr_p}. Skipped.")
 
         if req.sl_price:
             sl_val = float(req.sl_price)
             if (int(req.side) == 1 and sl_val < curr_p) or (int(req.side) == 2 and sl_val > curr_p):
                 final_sl = round_step(sl_val, tick_size)
             else:
-                print(f"WARNING: AI SL ({sl_val}) invalid for side {req.side} @ {curr_p}. Skipped.")
+                print(f"⚠️ WARNING: AI SL ({sl_val}) invalid for side {req.side} @ {curr_p}. Skipped.")
 
         has_bracket = bool(final_tp or final_sl)
         
@@ -620,6 +623,7 @@ async def trade_unified(req: UnifiedTradeRequest):
         print(f">>> SODEX: Executing {req.symbol} Order...")
         print(f"    - Side: {'LONG' if int(req.side) == 1 else 'SHORT'}")
         print(f"    - Type: {'MARKET' if is_market else 'LIMIT'}")
+        if not is_market: print(f"    - Price: {req.price}")
         print(f"    - Quantity: {req.quantity}")
         print(f"    - Leverage: x{req.leverage}")
         if req.tp_price: print(f"    - TP: {req.tp_price}")
@@ -637,16 +641,30 @@ async def trade_unified(req: UnifiedTradeRequest):
             params=params,
             api_name=temp_client.api_key_name,
             api_nonce=nonce_ord,
-            chain_id=temp_client.chain_id,
+            chain_id=286623,
             api_public_key=temp_client.api_public_key
         )
         
         order_res = await retry_async(temp_client.execute_order, params, sig_ord, nonce_ord)
         
         if order_res.get("code") == 0:
-            print(f"SODEX SUCCESS: Order placed successfully. Response: {order_res.get('msg')}")
-        else:
-            print(f"SODEX FAILED: {order_res.get('error') or order_res.get('msg')}")
+            # Check inner data for order-specific errors
+            data_list = order_res.get("data", [])
+            has_error = False
+            for d in data_list:
+                if isinstance(d, dict) and d.get("code") != 0:
+                    has_error = True
+                    err_msg = d.get("error") or d.get("msg")
+                    return {"code": -1, "error": f"Sodex Order Failed: {err_msg}"}
+            
+            if not has_error:
+                print(f"✅ SODEX SUCCESS: Order placed successfully.")
+                o_type = "MARKET" if is_market else "LIMIT"
+                db.save_auto_log(req.address, f"{req.symbol}: Unified {o_type} {'LONG' if int(req.side) == 1 else 'SHORT'} executed.")
+                return {"code": 0, "status": "success", "data": order_res}
+        
+        print(f"❌ SODEX FAILED: {order_res.get('error') or order_res.get('msg')}")
+            
         return order_res
 
     except Exception as e:
@@ -675,15 +693,8 @@ async def close_position(req: CloseRequest):
         if not private_key or not account_id:
             raise HTTPException(status_code=400, detail="User credentials missing")
             
-        if network_mode == "mainnet":
-            api_key = user_conf.get("sodex_api_key")
-            signing_key = user_conf.get("sodex_private_key") or private_key
-        else:
-            signing_key = private_key
-            api_key = SodexAuth.recover_address(signing_key) if signing_key else None
-            
         # Create client for this user
-        user_client = SodexClient(api_key_name=api_key, private_key=signing_key, network_mode=network_mode)
+        user_client = SodexClient(private_key=private_key)
         
         # Resolve Symbol ID
         sym_info = user_client.get_symbol_info(req.symbol)
@@ -713,11 +724,10 @@ async def close_position(req: CloseRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/check-account")
-async def check_account(address: str = Query(...), network: Optional[str] = Query(None)):
+async def check_account(address: str = Query(...)):
     try:
-        target_client = get_client(network, address)
         # 1. Get Account ID and Balance from State
-        state = await retry_async(target_client.get_perps_state, address)
+        state = await retry_async(client.get_perps_state, address)
         aid = None
         balance = "0.00"
         
@@ -738,7 +748,7 @@ async def check_account(address: str = Query(...), network: Optional[str] = Quer
 
         # 2. Get Balance from Balances endpoint as fallback
         if balance == "0.00":
-            bal_resp = await retry_async(target_client.get_perps_balances, address)
+            bal_resp = await retry_async(client.get_perps_balances, address)
             if bal_resp and "data" in bal_resp:
                 # Assuming first coin or vUSDC
                 balances = bal_resp["data"].get("balances", [])
@@ -756,4 +766,4 @@ async def check_account(address: str = Query(...), network: Optional[str] = Quer
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)

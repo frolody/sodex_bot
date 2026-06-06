@@ -116,7 +116,7 @@ const TradingChart: React.FC<TradingChartProps> = ({ data, symbol }) => {
               open, high, low, close
             };
           })
-          .filter((item: any) => item !== null) // Remove invalid points
+          .filter((item: any): item is any => item !== null) // Remove invalid points with type predicate
           .sort((a, b) => a.time - b.time);
 
         // Remove duplicate timestamps (required by lightweight-charts)
@@ -127,7 +127,7 @@ const TradingChart: React.FC<TradingChartProps> = ({ data, symbol }) => {
         if (uniqueData.length > 0) {
           console.log(`CHART [${symbol}]: Rendering ${uniqueData.length} valid candles.`);
           // Log first and last price to see if they differ
-          console.log(`CHART [${symbol}]: First Close: ${uniqueData[0].close}, Last Close: ${uniqueData[uniqueData.length-1].close}`);
+          console.log(`CHART [${symbol}]: First Close: ${uniqueData[0]?.close}, Last Close: ${uniqueData[uniqueData.length-1]?.close}`);
           
           seriesRef.current.setData(uniqueData);
           
